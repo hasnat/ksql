@@ -22,12 +22,11 @@ import io.confluent.ksql.metastore.model.KeyField;
 import io.confluent.ksql.metastore.model.KsqlStream;
 import io.confluent.ksql.metastore.model.KsqlTable;
 import io.confluent.ksql.metastore.model.KsqlTopic;
-import io.confluent.ksql.schema.ksql.KsqlSchema;
-import io.confluent.ksql.serde.KsqlTopicSerDe;
-import io.confluent.ksql.serde.json.KsqlJsonTopicSerDe;
+import io.confluent.ksql.schema.ksql.LogicalSchema;
+import io.confluent.ksql.serde.KsqlSerdeFactory;
+import io.confluent.ksql.serde.SerdeOption;
+import io.confluent.ksql.serde.json.KsqlJsonSerdeFactory;
 import io.confluent.ksql.util.timestamp.MetadataTimestampExtractionPolicy;
-import java.util.Optional;
-import java.util.function.Supplier;
 import org.apache.kafka.common.serialization.Serdes;
 import org.apache.kafka.connect.data.Schema;
 import org.apache.kafka.connect.data.SchemaBuilder;
@@ -38,19 +37,21 @@ public final class MetaStoreFixture {
   }
 
   public static MutableMetaStore getNewMetaStore(final FunctionRegistry functionRegistry) {
-    return getNewMetaStore(functionRegistry, KsqlJsonTopicSerDe::new);
+    return getNewMetaStore(functionRegistry, new KsqlJsonSerdeFactory());
   }
 
-  public static MutableMetaStore getNewMetaStore(final FunctionRegistry functionRegistry,
-                                          final Supplier<KsqlTopicSerDe> serde) {
-
+  public static MutableMetaStore getNewMetaStore(
+      final FunctionRegistry functionRegistry,
+      final KsqlSerdeFactory valueSerdeFactory
+  ) {
     final MetadataTimestampExtractionPolicy timestampExtractionPolicy
         = new MetadataTimestampExtractionPolicy();
+
     final MutableMetaStore metaStore = new MetaStoreImpl(functionRegistry);
 
     final Schema test1Schema = SchemaBuilder.struct()
         .field("ROWTIME", Schema.OPTIONAL_INT64_SCHEMA)
-        .field("ROWKEY", Schema.OPTIONAL_INT64_SCHEMA)
+        .field("ROWKEY", Schema.OPTIONAL_STRING_SCHEMA)
         .field("COL0", Schema.OPTIONAL_INT64_SCHEMA)
         .field("COL1", Schema.OPTIONAL_STRING_SCHEMA)
         .field("COL2", Schema.OPTIONAL_STRING_SCHEMA)
@@ -61,38 +62,42 @@ public final class MetaStoreFixture {
 
     final KsqlTopic
         ksqlTopic0 =
-        new KsqlTopic("TEST0", "test0", serde.get(), false);
+        new KsqlTopic("TEST0", "test0", valueSerdeFactory, false);
 
     final KsqlStream<?> ksqlStream0 = new KsqlStream<>(
         "sqlexpression",
         "TEST0",
-        KsqlSchema.of(test1Schema),
+        LogicalSchema.of(test1Schema).withImplicitAndKeyFieldsInValue(),
+        SerdeOption.none(),
         KeyField.of("COL0", test1Schema.field("COL0")),
         timestampExtractionPolicy,
         ksqlTopic0,
-        Serdes::String);
+        Serdes::String
+    );
 
     metaStore.putTopic(ksqlTopic0);
     metaStore.putSource(ksqlStream0);
 
     final KsqlTopic
         ksqlTopic1 =
-        new KsqlTopic("TEST1", "test1", serde.get(), false);
+        new KsqlTopic("TEST1", "test1", valueSerdeFactory, false);
 
     final KsqlStream<?> ksqlStream1 = new KsqlStream<>("sqlexpression",
         "TEST1",
-        KsqlSchema.of(test1Schema),
+        LogicalSchema.of(test1Schema).withImplicitAndKeyFieldsInValue(),
+        SerdeOption.none(),
         KeyField.of("COL0", test1Schema.field("COL0")),
         timestampExtractionPolicy,
         ksqlTopic1,
-        Serdes::String);
+        Serdes::String
+    );
 
     metaStore.putTopic(ksqlTopic1);
     metaStore.putSource(ksqlStream1);
 
     final Schema test2Schema = SchemaBuilder.struct()
         .field("ROWTIME", Schema.OPTIONAL_INT64_SCHEMA)
-        .field("ROWKEY", Schema.OPTIONAL_INT64_SCHEMA)
+        .field("ROWKEY", Schema.OPTIONAL_STRING_SCHEMA)
         .field("COL0", Schema.OPTIONAL_INT64_SCHEMA)
         .field("COL1", Schema.OPTIONAL_STRING_SCHEMA)
         .field("COL2", Schema.OPTIONAL_STRING_SCHEMA)
@@ -102,15 +107,17 @@ public final class MetaStoreFixture {
 
     final KsqlTopic
         ksqlTopic2 =
-        new KsqlTopic("TEST2", "test2", serde.get(), false);
+        new KsqlTopic("TEST2", "test2", valueSerdeFactory, false);
     final KsqlTable<String> ksqlTable = new KsqlTable<>(
         "sqlexpression",
         "TEST2",
-        KsqlSchema.of(test2Schema),
+        LogicalSchema.of(test2Schema),
+        SerdeOption.none(),
         KeyField.of("COL0", test2Schema.field("COL0")),
         timestampExtractionPolicy,
         ksqlTopic2,
-        Serdes::String);
+        Serdes::String
+    );
 
     metaStore.putTopic(ksqlTopic2);
     metaStore.putSource(ksqlTable);
@@ -147,23 +154,25 @@ public final class MetaStoreFixture {
 
     final KsqlTopic
         ksqlTopicOrders =
-        new KsqlTopic("ORDERS_TOPIC", "orders_topic", serde.get(), false);
+        new KsqlTopic("ORDERS_TOPIC", "orders_topic", valueSerdeFactory, false);
 
     final KsqlStream<?> ksqlStreamOrders = new KsqlStream<>(
         "sqlexpression",
         "ORDERS",
-        KsqlSchema.of(ordersSchema),
+        LogicalSchema.of(ordersSchema).withImplicitAndKeyFieldsInValue(),
+        SerdeOption.none(),
         KeyField.of("ORDERTIME", ordersSchema.field("ORDERTIME")),
         timestampExtractionPolicy,
         ksqlTopicOrders,
-        Serdes::String);
+        Serdes::String
+    );
 
     metaStore.putTopic(ksqlTopicOrders);
     metaStore.putSource(ksqlStreamOrders);
 
     final Schema testTable3 = SchemaBuilder.struct()
         .field("ROWTIME", Schema.OPTIONAL_INT64_SCHEMA)
-        .field("ROWKEY", Schema.OPTIONAL_INT64_SCHEMA)
+        .field("ROWKEY", Schema.OPTIONAL_STRING_SCHEMA)
         .field("COL0", Schema.OPTIONAL_INT64_SCHEMA)
         .field("COL1", Schema.OPTIONAL_STRING_SCHEMA)
         .field("COL2", Schema.OPTIONAL_STRING_SCHEMA)
@@ -173,15 +182,17 @@ public final class MetaStoreFixture {
 
     final KsqlTopic
         ksqlTopic3 =
-        new KsqlTopic("TEST3", "test3", serde.get(), false);
+        new KsqlTopic("TEST3", "test3", valueSerdeFactory, false);
     final KsqlTable<String> ksqlTable3 = new KsqlTable<>(
         "sqlexpression",
         "TEST3",
-        KsqlSchema.of(testTable3),
+        LogicalSchema.of(testTable3),
+        SerdeOption.none(),
         KeyField.of("COL0", testTable3.field("COL0")),
         timestampExtractionPolicy,
         ksqlTopic3,
-        Serdes::String);
+        Serdes::String
+    );
 
     metaStore.putTopic(ksqlTopic3);
     metaStore.putSource(ksqlTable3);
@@ -195,31 +206,36 @@ public final class MetaStoreFixture {
 
     final KsqlTopic
         nestedArrayStructMapTopic =
-        new KsqlTopic("NestedArrayStructMap", "NestedArrayStructMap_topic", serde.get(), false);
+        new KsqlTopic("NestedArrayStructMap", "NestedArrayStructMap_topic", valueSerdeFactory,
+            false);
 
     final KsqlStream<?> nestedArrayStructMapOrders = new KsqlStream<>(
         "sqlexpression",
         "NESTED_STREAM",
-        KsqlSchema.of(nestedArrayStructMapSchema),
-        KeyField.of(Optional.empty(), Optional.empty()),
+        LogicalSchema.of(nestedArrayStructMapSchema).withImplicitAndKeyFieldsInValue(),
+        SerdeOption.none(),
+        KeyField.none(),
         timestampExtractionPolicy,
         nestedArrayStructMapTopic,
-        Serdes::String);
+        Serdes::String
+    );
 
     metaStore.putTopic(nestedArrayStructMapTopic);
     metaStore.putSource(nestedArrayStructMapOrders);
 
     final KsqlTopic ksqlTopic4 =
-        new KsqlTopic("TEST4", "test4", serde.get(), false);
+        new KsqlTopic("TEST4", "test4", valueSerdeFactory, false);
 
     final KsqlStream<?> ksqlStream4 = new KsqlStream<>(
         "sqlexpression4",
         "TEST4",
-        KsqlSchema.of(test1Schema),
-        KeyField.of(Optional.empty(), Optional.empty()),
+        LogicalSchema.of(test1Schema),
+        SerdeOption.none(),
+        KeyField.none(),
         timestampExtractionPolicy,
         ksqlTopic4,
-        Serdes::String);
+        Serdes::String
+    );
 
     metaStore.putTopic(ksqlTopic4);
     metaStore.putSource(ksqlStream4);

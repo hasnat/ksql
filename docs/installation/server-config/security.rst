@@ -12,6 +12,7 @@ of the other services it communicates with, like |ak-tm| and |sr|.
   :ref:`SASL for authentication <kafka_sasl_auth>`, and :ref:`authorization with ACLs <kafka_authorization>`.
 - KSQL supports :ref:`Schema Registry security features <schemaregistry_security>` such SSL for encryption
   and mutual authentication for authorization.
+- Starting in |cp| 5.2, KSQL supports SSL on all network traffic.
 
 To configure security for KSQL, add your configuration settings to the ``<path-to-confluent>/etc/ksql/ksql-server.properties``
 file and then :ref:`start the KSQL server <start_ksql-server>` with your configuration file specified.
@@ -182,6 +183,8 @@ Which results in an output similar to:
 
 Where each line of the output is the password encrypted using different mechanisms, starting with
 plain text.
+
+.. _basic-ksql-http:
 
 -------------------------------------------------
 Configuring the CLI for Basic HTTP Authentication

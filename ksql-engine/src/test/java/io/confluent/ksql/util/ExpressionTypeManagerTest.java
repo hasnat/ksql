@@ -23,7 +23,7 @@ import io.confluent.ksql.analyzer.Analysis;
 import io.confluent.ksql.function.FunctionRegistry;
 import io.confluent.ksql.function.TestFunctionRegistry;
 import io.confluent.ksql.metastore.MetaStore;
-import io.confluent.ksql.schema.ksql.KsqlSchema;
+import io.confluent.ksql.schema.ksql.LogicalSchema;
 import org.apache.kafka.connect.data.Schema;
 import org.apache.kafka.connect.data.SchemaBuilder;
 import org.junit.Assert;
@@ -55,7 +55,7 @@ public class ExpressionTypeManagerTest {
         .field("TEST1.COL3", SchemaBuilder.OPTIONAL_FLOAT64_SCHEMA)
         .build();
 
-    expressionTypeManager = new ExpressionTypeManager(KsqlSchema.of(schema), FUNCTION_REGISTRY);
+    expressionTypeManager = new ExpressionTypeManager(LogicalSchema.of(schema), FUNCTION_REGISTRY);
     ordersExpressionTypeManager = new ExpressionTypeManager(
         metaStore.getSource("ORDERS").getSchema(),
         FUNCTION_REGISTRY
@@ -94,7 +94,7 @@ public class ExpressionTypeManagerTest {
     final String simpleQuery = "SELECT col1 > 10 FROM test1;";
     final Analysis analysis = analyzeQuery(simpleQuery, metaStore);
     expectedException.expect(KsqlException.class);
-    expectedException.expectMessage("Operator GREATER_THAN cannot be used to compare STRING and INT32");
+    expectedException.expectMessage("Operator GREATER_THAN cannot be used to compare STRING and INTEGER");
 
     // When:
     expressionTypeManager.getExpressionSchema(analysis.getSelectExpressions().get(0));
@@ -279,7 +279,7 @@ public class ExpressionTypeManagerTest {
     assertThat(caseSchema, equalTo(metaStore
         .getSource("ORDERS")
         .getSchema()
-        .findField("ADDRESS")
+        .findValueField("ADDRESS")
         .get()
         .schema()));
   }

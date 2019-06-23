@@ -19,7 +19,7 @@ import static org.hamcrest.CoreMatchers.equalTo;
 import static org.junit.Assert.assertThat;
 
 import io.confluent.ksql.rest.entity.FieldInfo;
-import io.confluent.ksql.schema.ksql.KsqlSchema;
+import io.confluent.ksql.schema.ksql.LogicalSchema;
 import java.util.List;
 import java.util.Optional;
 import org.apache.kafka.connect.data.Schema;
@@ -31,7 +31,7 @@ public class EntityUtilTest {
       final Schema primitiveSchema,
       final String schemaName
   ) {
-    final KsqlSchema schema = KsqlSchema.of(SchemaBuilder
+    final LogicalSchema schema = LogicalSchema.of(SchemaBuilder
         .struct()
         .field("field", primitiveSchema)
         .build());
@@ -47,36 +47,37 @@ public class EntityUtilTest {
 
   @Test
   public void shouldBuildCorrectIntegerField() {
-    shouldBuildCorrectPrimitiveField(Schema.INT32_SCHEMA, "INTEGER");
+    shouldBuildCorrectPrimitiveField(Schema.OPTIONAL_INT32_SCHEMA, "INTEGER");
   }
 
   @Test
   public void shouldBuildCorrectBigintField() {
-    shouldBuildCorrectPrimitiveField(Schema.INT64_SCHEMA, "BIGINT");
+    shouldBuildCorrectPrimitiveField(Schema.OPTIONAL_INT64_SCHEMA, "BIGINT");
   }
 
   @Test
   public void shouldBuildCorrectDoubleField() {
-    shouldBuildCorrectPrimitiveField(Schema.FLOAT64_SCHEMA, "DOUBLE");
+    shouldBuildCorrectPrimitiveField(Schema.OPTIONAL_FLOAT64_SCHEMA, "DOUBLE");
   }
 
   @Test
   public void shouldBuildCorrectStringField() {
-    shouldBuildCorrectPrimitiveField(Schema.STRING_SCHEMA, "STRING");
+    shouldBuildCorrectPrimitiveField(Schema.OPTIONAL_STRING_SCHEMA, "STRING");
   }
 
   @Test
   public void shouldBuildCorrectBooleanField() {
-    shouldBuildCorrectPrimitiveField(Schema.BOOLEAN_SCHEMA, "BOOLEAN");
+    shouldBuildCorrectPrimitiveField(Schema.OPTIONAL_BOOLEAN_SCHEMA, "BOOLEAN");
   }
 
   @Test
   public void shouldBuildCorrectMapField() {
     // Given:
-    final KsqlSchema schema = KsqlSchema.of(SchemaBuilder
+    final LogicalSchema schema = LogicalSchema.of(SchemaBuilder
         .struct()
         .field("field", SchemaBuilder
             .map(Schema.OPTIONAL_STRING_SCHEMA, Schema.OPTIONAL_INT32_SCHEMA)
+            .optional()
             .build())
         .build());
 
@@ -94,10 +95,11 @@ public class EntityUtilTest {
   @Test
   public void shouldBuildCorrectArrayField() {
     // Given:
-    final KsqlSchema schema = KsqlSchema.of(SchemaBuilder
+    final LogicalSchema schema = LogicalSchema.of(SchemaBuilder
         .struct()
         .field("field", SchemaBuilder
             .array(SchemaBuilder.OPTIONAL_INT64_SCHEMA)
+            .optional()
             .build())
         .build());
 
@@ -115,13 +117,14 @@ public class EntityUtilTest {
   @Test
   public void shouldBuildCorrectStructField() {
     // Given:
-    final KsqlSchema schema = KsqlSchema.of(SchemaBuilder
+    final LogicalSchema schema = LogicalSchema.of(SchemaBuilder
         .struct()
         .field(
             "field",
             SchemaBuilder.
                 struct()
-                .field("innerField", Schema.STRING_SCHEMA)
+                .field("innerField", Schema.OPTIONAL_STRING_SCHEMA)
+                .optional()
                 .build())
         .build());
 
@@ -141,10 +144,10 @@ public class EntityUtilTest {
   @Test
   public void shouldBuildMiltipleFieldsCorrectly() {
     // Given:
-    final KsqlSchema schema = KsqlSchema.of(SchemaBuilder
+    final LogicalSchema schema = LogicalSchema.of(SchemaBuilder
         .struct()
-        .field("field1", Schema.INT32_SCHEMA)
-        .field("field2", Schema.INT64_SCHEMA)
+        .field("field1", Schema.OPTIONAL_INT32_SCHEMA)
+        .field("field2", Schema.OPTIONAL_INT64_SCHEMA)
         .build());
 
     // When:

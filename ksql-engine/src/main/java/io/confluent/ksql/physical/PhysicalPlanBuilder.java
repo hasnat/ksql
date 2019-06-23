@@ -34,7 +34,8 @@ import io.confluent.ksql.planner.plan.KsqlStructuredDataOutputNode;
 import io.confluent.ksql.planner.plan.OutputNode;
 import io.confluent.ksql.planner.plan.PlanNode;
 import io.confluent.ksql.query.QueryId;
-import io.confluent.ksql.schema.ksql.KsqlSchema;
+import io.confluent.ksql.schema.ksql.LogicalSchema;
+import io.confluent.ksql.schema.ksql.PhysicalSchema;
 import io.confluent.ksql.services.ServiceContext;
 import io.confluent.ksql.structured.QueuedSchemaKStream;
 import io.confluent.ksql.structured.SchemaKStream;
@@ -104,10 +105,10 @@ public class PhysicalPlanBuilder {
   }
 
   public QueryMetadata buildPhysicalPlan(final LogicalPlanNode logicalPlanNode) {
-    final OutputNode logicalNode = logicalPlanNode.getNode()
+    final OutputNode outputNode = logicalPlanNode.getNode()
         .orElseThrow(() -> new IllegalArgumentException("Need an output node to build a plan"));
 
-    final QueryId queryId = logicalNode.getQueryId(queryIdGenerator);
+    final QueryId queryId = outputNode.getQueryId(queryIdGenerator);
 
     final KsqlQueryBuilder ksqlQueryBuilder = KsqlQueryBuilder.of(
         builder,
@@ -118,9 +119,7 @@ public class PhysicalPlanBuilder {
         queryId
     );
 
-    final SchemaKStream<?> resultStream = logicalNode.buildStream(ksqlQueryBuilder);
-
-    final OutputNode outputNode = resultStream.outputNode();
+    final SchemaKStream<?> resultStream = outputNode.buildStream(ksqlQueryBuilder);
 
     if (outputNode instanceof KsqlBareOutputNode) {
       if (!(resultStream instanceof QueuedSchemaKStream)) {
@@ -197,7 +196,8 @@ public class PhysicalPlanBuilder {
         processingLogContext
     );
 
-    final TransientQueryQueue<?> queue = new TransientQueryQueue<>(schemaKStream);
+    final TransientQueryQueue<?> queue =
+        new TransientQueryQueue<>(schemaKStream, bareOutputNode.getLimit());
 
     final KafkaStreams streams = kafkaStreamsBuilder.buildKafkaStreams(builder, streamsProperties);
 
@@ -235,7 +235,7 @@ public class PhysicalPlanBuilder {
       metaStore.putTopic(outputNode.getKsqlTopic());
     }
 
-    final KsqlSchema sinkSchema = outputNode.getSchema().withImplicitFields();
+    final LogicalSchema sinkSchema = outputNode.getSchema().withImplicitAndKeyFieldsInValue();
 
     final DataSource<?> sinkDataSource;
     if (schemaKStream instanceof SchemaKTable) {
@@ -245,6 +245,7 @@ public class PhysicalPlanBuilder {
               sqlExpression,
               outputNode.getId().toString(),
               sinkSchema,
+              outputNode.getSerdeOptions(),
               schemaKTable.getKeyField(),
               outputNode.getTimestampExtractionPolicy(),
               outputNode.getKsqlTopic(),
@@ -256,6 +257,7 @@ public class PhysicalPlanBuilder {
               sqlExpression,
               outputNode.getId().toString(),
               sinkSchema,
+              outputNode.getSerdeOptions(),
               schemaKStream.getKeyField(),
               outputNode.getTimestampExtractionPolicy(),
               outputNode.getKsqlTopic(),
@@ -277,14 +279,20 @@ public class PhysicalPlanBuilder {
         queryId,
         processingLogContext
     );
+
     final KafkaStreams streams = kafkaStreamsBuilder.buildKafkaStreams(builder, streamsProperties);
 
     final Topology topology = builder.build();
 
+    final PhysicalSchema querySchema = PhysicalSchema.from(
+        outputNode.getSchema().withoutImplicitAndKeyFieldsInValue(),
+        outputNode.getSerdeOptions()
+    );
+
     return new PersistentQueryMetadata(
         sqlExpression,
         streams,
-        sinkSchema,
+        querySchema,
         getSourceNames(outputNode),
         sinkDataSource.getName(),
         schemaKStream.getExecutionPlan(""),
@@ -322,8 +330,8 @@ public class PhysicalPlanBuilder {
           existing.getDataSourceType()));
     }
 
-    final KsqlSchema resultSchema = sinkDataSource.getSchema();
-    final KsqlSchema existingSchema = existing.getSchema();
+    final LogicalSchema resultSchema = sinkDataSource.getSchema();
+    final LogicalSchema existingSchema = existing.getSchema();
 
     if (!resultSchema.equals(existingSchema)) {
       throw new KsqlException("Incompatible schema between results and sink. "

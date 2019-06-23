@@ -18,45 +18,41 @@ package io.confluent.ksql.analyzer;
 import static java.util.Objects.requireNonNull;
 
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableSet;
 import com.google.errorprone.annotations.Immutable;
 import io.confluent.ksql.metastore.SerdeFactory;
-import io.confluent.ksql.metastore.model.DataSource;
 import io.confluent.ksql.metastore.model.KsqlTopic;
 import io.confluent.ksql.parser.tree.DereferenceExpression;
 import io.confluent.ksql.parser.tree.Expression;
 import io.confluent.ksql.parser.tree.QualifiedName;
 import io.confluent.ksql.parser.tree.QualifiedNameReference;
 import io.confluent.ksql.parser.tree.WindowExpression;
+import io.confluent.ksql.planner.plan.DataSourceNode;
 import io.confluent.ksql.planner.plan.JoinNode;
-import io.confluent.ksql.serde.Format;
-import io.confluent.ksql.util.Pair;
+import io.confluent.ksql.serde.SerdeOption;
 import io.confluent.ksql.util.SchemaUtil;
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.Optional;
+import java.util.OptionalInt;
 import java.util.Set;
 
 public class Analysis {
 
   private Optional<Into> into = Optional.empty();
-  private final Map<String, Object> intoProperties = new HashMap<>();
-  private Format intoFormat = null;
-  private String intoKafkaTopicName = null;
-  private final List<Pair<DataSource<?>, String>> fromDataSources = new ArrayList<>();
+  private final List<DataSourceNode> fromDataSources = new ArrayList<>();
   private JoinNode join;
   private Expression whereExpression = null;
   private final List<Expression> selectExpressions = new ArrayList<>();
   private final List<String> selectExpressionAlias = new ArrayList<>();
-
   private final List<Expression> groupByExpressions = new ArrayList<>();
   private WindowExpression windowExpression = null;
-
+  private Optional<String> timestampColumnName = Optional.empty();
+  private Optional<String> timestampFormat = Optional.empty();
+  private Optional<String> partitionBy = Optional.empty();
+  private ImmutableSet<SerdeOption> serdeOptions = ImmutableSet.of();
   private Expression havingExpression = null;
-
-  private Integer limitClause = null;
-
+  private OptionalInt limitClause = OptionalInt.empty();
 
   void addSelectItem(final Expression expression, final String alias) {
     selectExpressions.add(expression);
@@ -71,16 +67,11 @@ public class Analysis {
     this.into = Optional.of(into);
   }
 
-
-  public List<Pair<DataSource<?>, String>> getFromDataSources() {
-    return fromDataSources;
-  }
-
   public Expression getWhereExpression() {
     return whereExpression;
   }
 
-  public void setWhereExpression(final Expression whereExpression) {
+  void setWhereExpression(final Expression whereExpression) {
     this.whereExpression = whereExpression;
   }
 
@@ -98,22 +89,6 @@ public class Analysis {
 
   public void setJoin(final JoinNode join) {
     this.join = join;
-  }
-
-  public void setIntoFormat(final Format intoFormat) {
-    this.intoFormat = intoFormat;
-  }
-
-  public void setIntoKafkaTopicName(final String intoKafkaTopicName) {
-    this.intoKafkaTopicName = intoKafkaTopicName;
-  }
-
-  public Format getIntoFormat() {
-    return intoFormat;
-  }
-
-  public String getIntoKafkaTopicName() {
-    return intoKafkaTopicName;
   }
 
   public List<Expression> getGroupByExpressions() {
@@ -140,33 +115,65 @@ public class Analysis {
     this.havingExpression = havingExpression;
   }
 
-  public Map<String, Object> getIntoProperties() {
-    return intoProperties;
+  public Optional<String> getTimestampColumnName() {
+    return timestampColumnName;
   }
 
-  public Optional<Integer> getLimitClause() {
-    return Optional.ofNullable(limitClause);
+  public void setTimestampColumnName(final String columnName) {
+    timestampColumnName = Optional.of(columnName);
   }
 
-  public void setLimitClause(final Integer limitClause) {
-    this.limitClause = limitClause;
+  public Optional<String> getTimestampFormat() {
+    return timestampFormat;
   }
 
-  public Pair<DataSource<?>, String> getFromDataSource(final int index) {
+  public void setTimestampFormat(final String format) {
+    timestampFormat = Optional.of(format);
+  }
+
+  public Optional<String> getPartitionBy() {
+    return partitionBy;
+  }
+
+  public void setPartitionBy(final String partitionBy) {
+    this.partitionBy = Optional.of(partitionBy);
+  }
+
+  public OptionalInt getLimitClause() {
+    return limitClause;
+  }
+
+  public void setLimitClause(final int limitClause) {
+    this.limitClause = OptionalInt.of(limitClause);
+  }
+
+  public DataSourceNode getFromDataSource(final int index) {
     return fromDataSources.get(index);
   }
 
-  void addDataSource(final Pair<DataSource<?>, String> fromDataSource) {
-    fromDataSources.add(fromDataSource);
+  int getFromDataSourceCount() {
+    return fromDataSources.size();
   }
 
-  public DereferenceExpression getDefaultArgument() {
+  void addDataSource(final DataSourceNode dataSourceNode) {
+    fromDataSources.add(dataSourceNode);
+  }
+
+  DereferenceExpression getDefaultArgument() {
     final String base = join == null
-        ? fromDataSources.get(0).getRight()
+        ? fromDataSources.get(0).getAlias()
         : join.getLeftAlias();
 
     final Expression baseExpression = new QualifiedNameReference(QualifiedName.of(base));
     return new DereferenceExpression(baseExpression, SchemaUtil.ROWTIME_NAME);
+  }
+
+  void setSerdeOptions(final Set<SerdeOption> serdeOptions) {
+    this.serdeOptions = ImmutableSet.copyOf(serdeOptions);
+  }
+
+  public Set<SerdeOption> getSerdeOptions() {
+    return serdeOptions;
   }
 
   @Immutable

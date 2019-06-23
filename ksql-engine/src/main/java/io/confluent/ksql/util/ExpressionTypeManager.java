@@ -37,15 +37,15 @@ import io.confluent.ksql.parser.tree.LikePredicate;
 import io.confluent.ksql.parser.tree.LongLiteral;
 import io.confluent.ksql.parser.tree.NotExpression;
 import io.confluent.ksql.parser.tree.NullLiteral;
-import io.confluent.ksql.parser.tree.PrimitiveType;
 import io.confluent.ksql.parser.tree.QualifiedNameReference;
 import io.confluent.ksql.parser.tree.SearchedCaseExpression;
 import io.confluent.ksql.parser.tree.StringLiteral;
 import io.confluent.ksql.parser.tree.SubscriptExpression;
 import io.confluent.ksql.parser.tree.Type;
 import io.confluent.ksql.parser.tree.WhenClause;
-import io.confluent.ksql.schema.ksql.KsqlSchema;
-import io.confluent.ksql.schema.ksql.LogicalSchemas;
+import io.confluent.ksql.schema.Operator;
+import io.confluent.ksql.schema.ksql.LogicalSchema;
+import io.confluent.ksql.schema.ksql.SchemaConverters;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
@@ -55,10 +55,13 @@ import org.apache.kafka.connect.data.Schema;
 public class ExpressionTypeManager
     extends DefaultAstVisitor<Expression, ExpressionTypeManager.ExpressionTypeContext> {
 
-  private final KsqlSchema schema;
+  private final LogicalSchema schema;
   private final FunctionRegistry functionRegistry;
 
-  public ExpressionTypeManager(final KsqlSchema schema, final FunctionRegistry functionRegistry) {
+  public ExpressionTypeManager(
+      final LogicalSchema schema,
+      final FunctionRegistry functionRegistry
+  ) {
     this.schema = Objects.requireNonNull(schema, "schema");
     this.functionRegistry = Objects.requireNonNull(functionRegistry, "functionRegistry");
   }
@@ -89,7 +92,7 @@ public class ExpressionTypeManager
     final Schema leftType = expressionTypeContext.getSchema();
     process(node.getRight(), expressionTypeContext);
     final Schema rightType = expressionTypeContext.getSchema();
-    expressionTypeContext.setSchema(resolveArithmeticType(leftType, rightType));
+    expressionTypeContext.setSchema(resolveArithmeticType(leftType, rightType, node.getOperator()));
     return null;
   }
 
@@ -106,11 +109,12 @@ public class ExpressionTypeManager
       final ExpressionTypeContext expressionTypeContext
   ) {
     final Type sqlType = node.getType();
-    if (!(sqlType instanceof PrimitiveType)) {
-      throw new KsqlFunctionException("Only casts to primitive types are supported: " + sqlType);
+    if (!sqlType.supportsCast()) {
+      throw new KsqlFunctionException("Only casts to primitive types or decimals "
+          + "are supported: " + sqlType);
     }
 
-    final Schema castType = LogicalSchemas.fromSqlTypeConverter().fromSqlType(sqlType);
+    final Schema castType = SchemaConverters.sqlToLogicalConverter().fromSqlType(sqlType);
     expressionTypeContext.setSchema(castType);
     return null;
   }
@@ -122,7 +126,7 @@ public class ExpressionTypeManager
     final Schema leftSchema = expressionTypeContext.getSchema();
     process(node.getRight(), expressionTypeContext);
     final Schema rightSchema = expressionTypeContext.getSchema();
-    ComparisonUtil.isValidComparison(leftSchema.type(), node.getType(), rightSchema.type());
+    ComparisonUtil.isValidComparison(leftSchema, node.getType(), rightSchema);
     expressionTypeContext.setSchema(Schema.OPTIONAL_BOOLEAN_SCHEMA);
     return null;
   }
@@ -139,7 +143,7 @@ public class ExpressionTypeManager
       final QualifiedNameReference node,
       final ExpressionTypeContext expressionTypeContext
   ) {
-    final Field schemaField = schema.findField(node.getName().getSuffix())
+    final Field schemaField = schema.findValueField(node.getName().getSuffix())
         .orElseThrow(() ->
             new KsqlException(String.format("Invalid Expression %s.", node.toString())));
 
@@ -153,7 +157,7 @@ public class ExpressionTypeManager
       final DereferenceExpression node,
       final ExpressionTypeContext expressionTypeContext
   ) {
-    final Field schemaField = schema.findField(node.toString())
+    final Field schemaField = schema.findValueField(node.toString())
         .orElseThrow(() ->
             new KsqlException(String.format("Invalid Expression %s.", node.toString())));
 
@@ -286,9 +290,11 @@ public class ExpressionTypeManager
     return null;
   }
 
-  private static Schema resolveArithmeticType(final Schema leftSchema,
-                                              final Schema rightSchema) {
-    return SchemaUtil.resolveBinaryOperatorResultType(leftSchema.type(), rightSchema.type());
+  private static Schema resolveArithmeticType(
+      final Schema leftSchema,
+      final Schema rightSchema,
+      final Operator operator) {
+    return SchemaUtil.resolveBinaryOperatorResultType(leftSchema, rightSchema, operator);
   }
 
   private void validateSearchedCaseExpression(final SearchedCaseExpression searchedCaseExpression) {

@@ -20,14 +20,18 @@ import static org.hamcrest.MatcherAssert.assertThat;
 
 import io.confluent.common.utils.IntegrationTest;
 import io.confluent.ksql.GenericRow;
-import io.confluent.ksql.KsqlContextTestUtil;
+import io.confluent.ksql.KsqlConfigTestUtil;
+import io.confluent.ksql.ServiceInfo;
 import io.confluent.ksql.engine.KsqlEngine;
 import io.confluent.ksql.engine.KsqlEngineTestUtil;
 import io.confluent.ksql.function.InternalFunctionRegistry;
 import io.confluent.ksql.logging.processing.ProcessingLogContext;
 import io.confluent.ksql.metastore.MetaStore;
+import io.confluent.ksql.metastore.model.DataSource;
 import io.confluent.ksql.query.QueryId;
-import io.confluent.ksql.schema.ksql.KsqlSchema;
+import io.confluent.ksql.schema.ksql.LogicalSchema;
+import io.confluent.ksql.schema.ksql.PhysicalSchema;
+import io.confluent.ksql.serde.SerdeOption;
 import io.confluent.ksql.services.DefaultServiceContext;
 import io.confluent.ksql.services.KafkaTopicClient;
 import io.confluent.ksql.services.ServiceContext;
@@ -76,7 +80,6 @@ public class JsonFormatTest {
   private KsqlConfig ksqlConfig;
   private KsqlEngine ksqlEngine;
   private ServiceContext serviceContext;
-  private ProcessingLogContext processingLogContext;
   private final TopicProducer topicProducer = new TopicProducer(CLUSTER);
   private final TopicConsumer topicConsumer = new TopicConsumer(CLUSTER);
 
@@ -88,15 +91,14 @@ public class JsonFormatTest {
   public void before() throws Exception {
     streamName = "STREAM_" + COUNTER.getAndIncrement();
 
-    ksqlConfig = KsqlContextTestUtil.createKsqlConfig(CLUSTER);
+    ksqlConfig = KsqlConfigTestUtil.create(CLUSTER);
     serviceContext = DefaultServiceContext.create(ksqlConfig);
-    processingLogContext = ProcessingLogContext.create();
 
     ksqlEngine = new KsqlEngine(
         serviceContext,
-        processingLogContext,
+        ProcessingLogContext.create(),
         new InternalFunctionRegistry(),
-        ksqlConfig.getString(KsqlConfig.KSQL_SERVICE_ID_CONFIG));
+        ServiceInfo.create(ksqlConfig));
 
     topicClient = serviceContext.getTopicClient();
     metaStore = ksqlEngine.getMetaStore();
@@ -127,7 +129,12 @@ public class JsonFormatTest {
     final Map<String, GenericRow> records = new HashMap<>();
     records.put("1", messageRow);
 
-    topicProducer.produceInputData(messageLogTopic, records, KsqlSchema.of(messageSchema));
+    final PhysicalSchema schema = PhysicalSchema.from(
+        LogicalSchema.of(messageSchema),
+        SerdeOption.none()
+    );
+
+    topicProducer.produceInputData(messageLogTopic, records, schema);
   }
 
   private void execInitCreateStreamQueries() {
@@ -235,10 +242,12 @@ public class JsonFormatTest {
       final String resultTopic,
       final int expectedNumMessages
   ) {
-    final KsqlSchema resultSchema = metaStore
-        .getSource(streamName)
-        .getSchema()
-        .withoutImplicitFields();
+    final DataSource<?> source = metaStore.getSource(streamName);
+
+    final PhysicalSchema resultSchema = PhysicalSchema.from(
+        source.getSchema().withoutImplicitAndKeyFieldsInValue(),
+        source.getSerdeOptions()
+    );
 
     return topicConsumer.readResults(resultTopic, resultSchema, expectedNumMessages, new StringDeserializer());
   }

@@ -28,9 +28,11 @@ import io.confluent.ksql.metastore.model.KsqlTopic;
 import io.confluent.ksql.physical.LimitHandler;
 import io.confluent.ksql.physical.QuerySchemas;
 import io.confluent.ksql.query.QueryId;
-import io.confluent.ksql.rest.entity.SchemaInfo.Type;
-import io.confluent.ksql.schema.ksql.KsqlSchema;
-import io.confluent.ksql.serde.json.KsqlJsonTopicSerDe;
+import io.confluent.ksql.schema.ksql.LogicalSchema;
+import io.confluent.ksql.schema.ksql.PhysicalSchema;
+import io.confluent.ksql.schema.ksql.SqlType;
+import io.confluent.ksql.serde.SerdeOption;
+import io.confluent.ksql.serde.json.KsqlJsonSerdeFactory;
 import io.confluent.ksql.util.PersistentQueryMetadata;
 import io.confluent.ksql.util.QueryMetadata;
 import io.confluent.ksql.util.QueuedQueryMetadata;
@@ -43,6 +45,7 @@ import java.util.Map;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.function.Consumer;
 import org.apache.kafka.common.serialization.Serdes;
+import org.apache.kafka.connect.data.Schema;
 import org.apache.kafka.connect.data.SchemaBuilder;
 import org.apache.kafka.streams.KafkaStreams;
 import org.apache.kafka.streams.Topology;
@@ -56,15 +59,19 @@ import org.mockito.junit.MockitoJUnitRunner;
 @RunWith(MockitoJUnitRunner.class)
 public class QueryDescriptionTest {
 
-  private static final KsqlSchema SCHEMA = KsqlSchema.of(
+  private static final LogicalSchema SCHEMA = LogicalSchema.of(
       SchemaBuilder.struct()
-          .field("field1", SchemaBuilder.int32().build())
-          .field("field2", SchemaBuilder.string().build())
+          .field("ROWTIME", Schema.OPTIONAL_INT64_SCHEMA)
+          .field("ROWKEY", Schema.OPTIONAL_STRING_SCHEMA)
+          .field("field1", Schema.OPTIONAL_INT32_SCHEMA)
+          .field("field2", Schema.OPTIONAL_STRING_SCHEMA)
           .build());
 
   private static final List<FieldInfo> EXPECTED_FIELDS = Arrays.asList(
-      new FieldInfo("field1", new SchemaInfo(Type.INTEGER, null, null)),
-      new FieldInfo("field2", new SchemaInfo(Type.STRING, null, null)));
+      new FieldInfo("ROWTIME", new SchemaInfo(SqlType.BIGINT, null, null)),
+      new FieldInfo("ROWKEY", new SchemaInfo(SqlType.STRING, null, null)),
+      new FieldInfo("field1", new SchemaInfo(SqlType.INTEGER, null, null)),
+      new FieldInfo("field2", new SchemaInfo(SqlType.STRING, null, null)));
 
   private static final String STATEMENT = "statement";
   private static final Map<String, Object> STREAMS_PROPS = Collections.singletonMap("k1", "v1");
@@ -120,16 +127,22 @@ public class QueryDescriptionTest {
   @Test
   public void shouldSetFieldsCorrectlyForPersistentQueryMetadata() {
     // Given:
-    final KsqlTopic sinkTopic = new KsqlTopic("fake_sink", "fake_sink", new KsqlJsonTopicSerDe(), true);
+    final KsqlTopic sinkTopic = new KsqlTopic("fake_sink", "fake_sink", new KsqlJsonSerdeFactory(), true);
     final KsqlStream<?> fakeSink = new KsqlStream<>(
-        STATEMENT, "fake_sink", SCHEMA,
-        KeyField.of(SCHEMA.fields().get(0).name(), SCHEMA.fields().get(0)),
-        new MetadataTimestampExtractionPolicy(), sinkTopic, Serdes::String);
+        STATEMENT,
+        "fake_sink",
+        SCHEMA,
+        SerdeOption.none(),
+        KeyField.of(SCHEMA.valueFields().get(0).name(), SCHEMA.valueFields().get(0)),
+        new MetadataTimestampExtractionPolicy(),
+        sinkTopic,
+        Serdes::String
+    );
 
     final PersistentQueryMetadata queryMetadata = new PersistentQueryMetadata(
         "test statement",
         queryStreams,
-        SCHEMA,
+        PhysicalSchema.from(SCHEMA, SerdeOption.none()),
         Collections.emptySet(),
         fakeSink.getName(),
         "execution plan",

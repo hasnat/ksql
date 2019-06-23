@@ -19,6 +19,7 @@ import static java.util.Objects.requireNonNull;
 
 import com.google.common.collect.ImmutableList;
 import com.google.errorprone.annotations.Immutable;
+import io.confluent.ksql.schema.ksql.SqlType;
 import io.confluent.ksql.util.KsqlException;
 import java.util.ArrayList;
 import java.util.List;
@@ -63,6 +64,11 @@ public final class Struct extends Type {
     }
     final Struct other = (Struct) obj;
     return Objects.equals(this.fields, other.fields);
+  }
+
+  @Override
+  public boolean supportsCast() {
+    return false;
   }
 
   @Immutable

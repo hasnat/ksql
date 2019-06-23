@@ -23,8 +23,12 @@ import java.io.Closeable;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
+import java.util.function.Supplier;
 import org.apache.kafka.common.MetricName;
 import org.apache.kafka.common.metrics.Gauge;
 import org.apache.kafka.common.metrics.MeasurableStat;
@@ -54,35 +58,54 @@ public class KsqlEngineMetrics implements Closeable {
   private final Sensor errorRate;
 
   private final String ksqlServiceId;
-
+  private final Map<String, String> customMetricsTags;
+  private final Optional<KsqlMetricsExtension> metricsExtension;
 
   private final KsqlEngine ksqlEngine;
   private final Metrics metrics;
 
-  public KsqlEngineMetrics(final KsqlEngine ksqlEngine) {
-    this(METRIC_GROUP_PREFIX, ksqlEngine, MetricCollectors.getMetrics());
+  public KsqlEngineMetrics(
+      final KsqlEngine ksqlEngine,
+      final Map<String, String> customMetricsTags,
+      final Optional<KsqlMetricsExtension> metricsExtension) {
+    this(
+        METRIC_GROUP_PREFIX,
+        ksqlEngine,
+        MetricCollectors.getMetrics(),
+        customMetricsTags,
+        metricsExtension);
   }
 
-  KsqlEngineMetrics(final String metricGroupPrefix, final KsqlEngine ksqlEngine,
-      final Metrics metrics) {
+  KsqlEngineMetrics(
+      final String metricGroupPrefix,
+      final KsqlEngine ksqlEngine,
+      final Metrics metrics,
+      final Map<String, String> customMetricsTags,
+      final Optional<KsqlMetricsExtension> metricsExtension) {
     this.ksqlEngine = ksqlEngine;
     this.ksqlServiceId = KsqlConstants.KSQL_INTERNAL_TOPIC_PREFIX + ksqlEngine.getServiceId();
     this.sensors = new ArrayList<>();
     this.countMetrics = new ArrayList<>();
     this.metricGroupName = metricGroupPrefix + "-query-stats";
+    this.customMetricsTags = customMetricsTags;
+    this.metricsExtension = metricsExtension;
 
     this.metrics = metrics;
 
-    configureNumActiveQueries(metrics);
-    this.messagesIn = configureMessagesIn(metrics);
-    this.totalMessagesIn = configureTotalMessagesIn(metrics);
-    this.totalBytesIn = configureTotalBytesIn(metrics);
-    this.messagesOut = configureMessagesOut(metrics);
-    this.numIdleQueries = configureIdleQueriesSensor(metrics);
-    this.messageConsumptionByQuery = configureMessageConsumptionByQuerySensor(metrics);
-    this.errorRate = configureErrorRate(metrics);
+    configureLivenessIndicator();
+    configureNumActiveQueries();
+    configureNumPersistentQueries();
+    this.messagesIn = configureMessagesIn();
+    this.totalMessagesIn = configureTotalMessagesIn();
+    this.totalBytesIn = configureTotalBytesIn();
+    this.messagesOut = configureMessagesOut();
+    this.numIdleQueries = configureIdleQueriesSensor();
+    this.messageConsumptionByQuery = configureMessageConsumptionByQuerySensor();
+    this.errorRate = configureErrorRate();
     Arrays.stream(State.values())
-        .forEach(state -> configureNumActiveQueriesForGivenState(metrics, state));
+        .forEach(state -> configureNumActiveQueriesForGivenState(state));
+
+    configureCustomMetrics();
   }
 
   @Override
@@ -142,63 +165,47 @@ public class KsqlEngineMetrics implements Closeable {
     this.errorRate.record(value);
   }
 
-  private Sensor configureErrorRate(final Metrics metrics) {
-    final Sensor sensor = createSensor(metrics, metricGroupName + "-error-rate");
-    sensor.add(
-        metrics.metricName(ksqlServiceId + "error-rate", this.metricGroupName,
-            "The number of messages which were consumed but not processed. "
-                + "Messages may not be processed if, for instance, the message "
-                + "contents could not be deserialized due to an incompatible schema. "
-                + "Alternately, a consumed messages may not have been produced, hence "
-                + "being effectively dropped. Such messages would also be counted "
-                + "toward the error rate."),
-        new Value());
-    return sensor;
+  private Sensor configureErrorRate() {
+    final String metricName = "error-rate";
+    final String description =
+        "The number of messages which were consumed but not processed. "
+        + "Messages may not be processed if, for instance, the message "
+        + "contents could not be deserialized due to an incompatible schema. "
+        + "Alternately, a consumed messages may not have been produced, hence "
+        + "being effectively dropped. Such messages would also be counted "
+        + "toward the error rate.";
+    return createSensor(KsqlMetric.of(metricName, description, Value::new));
   }
 
-  private Sensor configureMessagesOut(final Metrics metrics) {
-    final Sensor sensor = createSensor(metrics, metricGroupName + "-messages-produced");
-    sensor.add(
-        metrics.metricName(ksqlServiceId + "messages-produced-per-sec", this.metricGroupName,
-            "The number of messages produced per second across all queries"),
-        new Value());
-
-    return sensor;
+  private Sensor configureMessagesOut() {
+    final String metricName = "messages-produced-per-sec";
+    final String description = "The number of messages produced per second across all queries";
+    return createSensor(KsqlMetric.of(metricName, description, Value::new));
   }
 
-  private Sensor configureMessagesIn(final Metrics metrics) {
-    final Sensor sensor = createSensor(metrics, metricGroupName + "-messages-consumed");
-    sensor.add(
-        metrics.metricName(ksqlServiceId + "messages-consumed-per-sec", this.metricGroupName,
-            "The number of messages consumed per second across all queries"),
-        new Value());
-    return sensor;
+  private Sensor configureMessagesIn() {
+    final String metricName = "messages-consumed-per-sec";
+    final String description = "The number of messages consumed per second across all queries";
+    return createSensor(KsqlMetric.of(metricName, description, Value::new));
   }
 
-  private Sensor configureTotalMessagesIn(final Metrics metrics) {
-    final Sensor sensor = createSensor(metrics, metricGroupName + "-total-messages-consumed");
-    sensor.add(
-        metrics.metricName(ksqlServiceId + "messages-consumed-total", this.metricGroupName,
-            "The total number of messages consumed across all queries"),
-        new Value());
-    return sensor;
+  private Sensor configureTotalMessagesIn() {
+    final String metricName = "messages-consumed-total";
+    final String description = "The total number of messages consumed across all queries";
+    return createSensor(KsqlMetric.of(metricName, description, Value::new));
   }
 
-  private Sensor configureTotalBytesIn(final Metrics metrics) {
-    final Sensor sensor = createSensor(metrics, metricGroupName + "-total-bytes-consumed");
-    sensor.add(
-        metrics.metricName(ksqlServiceId + "bytes-consumed-total", this.metricGroupName,
-            "The total number of bytes consumed across all queries"),
-        new Value());
-    return sensor;
+  private Sensor configureTotalBytesIn() {
+    final String metricName = "bytes-consumed-total";
+    final String description = "The total number of bytes consumed across all queries";
+    return createSensor(KsqlMetric.of(metricName, description, Value::new));
   }
 
-  private void configureNumActiveQueries(final Metrics metrics) {
-    final Sensor sensor = createSensor(metrics, metricGroupName + "-active-queries");
-    sensor.add(
-        metrics.metricName(ksqlServiceId + "num-active-queries", this.metricGroupName,
-            "The current number of active queries running in this engine"),
-        new MeasurableStat() {
+  private void configureNumActiveQueries() {
+    final String metricName = "num-active-queries";
+    final String description = "The current number of active queries running in this engine";
+    final Supplier<MeasurableStat> statSupplier =
+        () -> new MeasurableStat() {
           @Override
           public double measure(final MetricConfig metricConfig, final long l) {
             return ksqlEngine.numberOfLiveQueries();
@@ -206,14 +213,17 @@ public class KsqlEngineMetrics implements Closeable {
 
           @Override
           public void record(final MetricConfig metricConfig, final double v, final long l) {
-            // We don't want to record anything, since the live queries anyway.
+            // We don't want to record anything, since the engine tracks query counts internally
           }
-        });
+        };
+    createSensor(KsqlMetric.of(metricName, description, statSupplier));
+  }
 
-    sensor.add(
-        metrics.metricName(ksqlServiceId + "num-persistent-queries", this.metricGroupName,
-            "The current number of persistent queries running in this engine"),
-        new MeasurableStat() {
+  private void configureNumPersistentQueries() {
+    final String metricName = "num-persistent-queries";
+    final String description = "The current number of persistent queries running in this engine";
+    final Supplier<MeasurableStat> statSupplier =
+        () -> new MeasurableStat() {
           @Override
           public double measure(final MetricConfig metricConfig, final long l) {
             return ksqlEngine.getPersistentQueries().size();
@@ -221,58 +231,128 @@ public class KsqlEngineMetrics implements Closeable {
 
           @Override
           public void record(final MetricConfig metricConfig, final double v, final long l) {
-            // No action for record since we can read the desired results directly.
+            // We don't want to record anything, since the engine tracks query counts internally
           }
-        }
+        };
+    createSensor(KsqlMetric.of(metricName, description, statSupplier));
+  }
+
+  private Sensor configureIdleQueriesSensor() {
+    final String metricName = "num-idle-queries";
+    final String description = "Number of inactive queries";
+    return createSensor(KsqlMetric.of(metricName, description, Value::new));
+  }
+
+  private void configureLivenessIndicator() {
+    final String metricName = "liveness-indicator";
+    final String description =
+        "A metric with constant value 1 indicating the server is up and emitting metrics";
+    final Supplier<MeasurableStat> statSupplier =
+        () -> new MeasurableStat() {
+          @Override
+          public double measure(final MetricConfig metricConfig, final long l) {
+            return 1;
+          }
+
+          @Override
+          public void record(final MetricConfig metricConfig, final double v, final long l) {
+            // Nothing to record
+          }
+        };
+    createSensor(KsqlMetric.of(metricName, description, statSupplier));
+  }
+
+  private Sensor configureMessageConsumptionByQuerySensor() {
+    final Sensor sensor = createSensor("message-consumption-by-query");
+    configureMetric(
+        sensor,
+        KsqlMetric.of("messages-consumed-max", "max msgs consumed by query", Max::new)
     );
-  }
-
-  private Sensor configureIdleQueriesSensor(final Metrics metrics) {
-    final Sensor sensor = createSensor(metrics, "num-idle-queries");
-    sensor.add(metrics.metricName(
-        ksqlServiceId + "num-idle-queries", this.metricGroupName),
-        new Value());
+    configureMetric(
+        sensor,
+        KsqlMetric.of("messages-consumed-min", "min msgs consumed by query", Min::new)
+    );
+    configureMetric(
+        sensor,
+        KsqlMetric.of("messages-consumed-avg", "mean msgs consumed by query", Avg::new)
+    );
     return sensor;
   }
 
-  private Sensor configureMessageConsumptionByQuerySensor(final Metrics metrics) {
-    final Sensor sensor = createSensor(
-        metrics,
-        ksqlServiceId + "message-consumption-by-query");
+  private void configureMetric(
+      final Sensor sensor,
+      final KsqlMetric metric) {
+    // legacy
     sensor.add(
-        metrics.metricName(ksqlServiceId + "messages-consumed-max", this.metricGroupName),
-        new Max());
+        metrics.metricName(ksqlServiceId + metric.name(), metricGroupName, metric.description()),
+        metric.statSupplier().get());
+    // new
     sensor.add(
-        metrics.metricName(ksqlServiceId + "messages-consumed-min", this.metricGroupName),
-        new Min());
-    sensor.add(
-        metrics.metricName(ksqlServiceId + "messages-consumed-avg", this.metricGroupName),
-        new Avg());
-    return sensor;
+        metrics.metricName(
+            metric.name(),
+            ksqlServiceId + metricGroupName,
+            metric.description(),
+            customMetricsTags),
+        metric.statSupplier().get());
   }
 
-  private Sensor createSensor(final Metrics metrics, final String sensorName) {
-    final Sensor sensor = metrics.sensor(sensorName);
+  private Sensor createSensor(final String sensorName) {
+    final Sensor sensor = metrics.sensor(metricGroupName + "-" + sensorName);
     sensors.add(sensor);
     return sensor;
   }
 
+  private Sensor createSensor(final KsqlMetric metric) {
+    final Sensor sensor = createSensor(metric.name());
+    configureMetric(sensor, metric);
+    return sensor;
+  }
 
-  private CountMetric configureNumActiveQueriesForGivenState(final Metrics metrics,
-      final KafkaStreams.State state) {
-    final String gaugeName = ksqlServiceId + metricGroupName + "-" + state + "-queries";
-    final Gauge<Long> gauge = (metricConfig, l) -> ksqlEngine.getPersistentQueries()
-        .stream()
-        .filter(queryMetadata -> queryMetadata.getState().equals(state.toString()))
-        .count();
-
-    final MetricName metricName = metrics.metricName(gaugeName,
-        metricGroupName,
-        String.format("Count of queries in %s state.", state.toString()));
+  private void configureGaugeForState(
+      final String name,
+      final String group,
+      final Map<String, String> tags,
+      final KafkaStreams.State state
+  ) {
+    final Gauge<Long> gauge =
+        (metricConfig, l) ->
+            ksqlEngine.getPersistentQueries()
+                .stream()
+                .filter(queryMetadata -> queryMetadata.getState().equals(state.toString()))
+                .count();
+    final String description = String.format("Count of queries in %s state.", state.toString());
+    final MetricName metricName = metrics.metricName(name, group, description, tags);
     final CountMetric countMetric = new CountMetric(metricName, gauge);
     metrics.addMetric(metricName, gauge);
     countMetrics.add(countMetric);
-    return countMetric;
+  }
+
+  private void configureNumActiveQueriesForGivenState(
+      final KafkaStreams.State state) {
+    final String name = state + "-queries";
+    // legacy
+    configureGaugeForState(
+        ksqlServiceId + metricGroupName + "-" + name,
+        metricGroupName,
+        Collections.emptyMap(),
+        state
+    );
+    // new
+    configureGaugeForState(
+        name,
+        ksqlServiceId + metricGroupName,
+        customMetricsTags,
+        state
+    );
+  }
+
+  private void configureCustomMetrics() {
+    if (!metricsExtension.isPresent()) {
+      return;
+    }
+
+    final List<KsqlMetric> customMetrics = metricsExtension.get().getCustomMetrics();
+    customMetrics.forEach(this::createSensor);
   }
 
   private static class CountMetric {

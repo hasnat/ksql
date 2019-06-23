@@ -35,7 +35,6 @@ statement
     : query                                                                 #querystatement
     | (LIST | SHOW) PROPERTIES                                              #listProperties
     | (LIST | SHOW) TOPICS                                                  #listTopics
-    | (LIST | SHOW) REGISTERED TOPICS                                       #listRegisteredTopics
     | (LIST | SHOW) STREAMS EXTENDED?                                       #listStreams
     | (LIST | SHOW) TABLES EXTENDED?                                        #listTables
     | (LIST | SHOW) FUNCTIONS                                               #listFunctions
@@ -46,22 +45,19 @@ statement
     | TERMINATE QUERY? qualifiedName                                        #terminateQuery
     | SET STRING EQ STRING                                                  #setProperty
     | UNSET STRING                                                          #unsetProperty
-    | REGISTER TOPIC (IF NOT EXISTS)? qualifiedName
-            (WITH tableProperties)?                                         #registerTopic
     | CREATE STREAM (IF NOT EXISTS)? qualifiedName
-                ('(' tableElement (',' tableElement)* ')')?
+                (tableElements)?
                 (WITH tableProperties)?                                     #createStream
     | CREATE STREAM (IF NOT EXISTS)? qualifiedName
             (WITH tableProperties)? AS query
                                        (PARTITION BY identifier)?           #createStreamAs
     | CREATE TABLE (IF NOT EXISTS)? qualifiedName
-                    ('(' tableElement (',' tableElement)* ')')?
+                    (tableElements)?
                     (WITH tableProperties)?                                 #createTable
     | CREATE TABLE (IF NOT EXISTS)? qualifiedName
             (WITH tableProperties)? AS query                                #createTableAs
     | INSERT INTO qualifiedName query (PARTITION BY identifier)?            #insertInto
     | INSERT INTO qualifiedName (columns)? VALUES values                    #insertValues
-    | DROP TOPIC (IF EXISTS)? qualifiedName                                 #dropTopic
     | DROP STREAM (IF EXISTS)? qualifiedName (DELETE TOPIC)?                #dropStream
     | DROP TABLE (IF EXISTS)? qualifiedName  (DELETE TOPIC)?                #dropTable
     | EXPLAIN  (statement | qualifiedName)                                  #explain
@@ -76,6 +72,10 @@ query
       (GROUP BY groupBy)?
       (HAVING having=booleanExpression)?
       limitClause?
+    ;
+
+tableElements
+    : '(' tableElement (',' tableElement)* ')'
     ;
 
 tableElement
@@ -268,6 +268,7 @@ type
     | ARRAY '<' type '>'
     | MAP '<' type ',' type '>'
     | STRUCT '<' identifier type (',' identifier type)* '>'
+    | DECIMAL '(' number ',' number ')'
     | baseType ('(' typeParameter (',' typeParameter)* ')')?
     ;
 
@@ -381,7 +382,6 @@ STRUCT: 'STRUCT';
 WITH: 'WITH';
 VALUES: 'VALUES';
 CREATE: 'CREATE';
-REGISTER: 'REGISTER';
 TABLE: 'TABLE';
 TOPIC: 'TOPIC';
 STREAM: 'STREAM';
@@ -400,7 +400,6 @@ SHOW: 'SHOW';
 LIST: 'LIST';
 TABLES: 'TABLES';
 TOPICS: 'TOPICS';
-REGISTERED: 'REGISTERED';
 QUERY: 'QUERY';
 QUERIES: 'QUERIES';
 TERMINATE: 'TERMINATE';
@@ -426,6 +425,7 @@ BEGINNING: 'BEGINNING';
 UNSET: 'UNSET';
 RUN: 'RUN';
 SCRIPT: 'SCRIPT';
+DECIMAL: 'DECIMAL';
 
 IF: 'IF';
 

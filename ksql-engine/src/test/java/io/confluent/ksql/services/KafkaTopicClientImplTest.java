@@ -74,11 +74,16 @@ import org.easymock.EasyMockRunner;
 import org.easymock.IArgumentMatcher;
 import org.easymock.Mock;
 import org.junit.Before;
+import org.junit.Rule;
 import org.junit.Test;
+import org.junit.rules.ExpectedException;
 import org.junit.runner.RunWith;
 
 @RunWith(EasyMockRunner.class)
 public class KafkaTopicClientImplTest {
+
+  @Rule
+  public final ExpectedException expectedException = ExpectedException.none();
 
   private static final String topicName1 = "topic1";
   private static final String topicName2 = "topic2";
@@ -103,9 +108,6 @@ public class KafkaTopicClientImplTest {
   @Before
   public void init() {
     node = new Node(1, "host", 9092);
-    expect(adminClient.describeCluster()).andReturn(describeClusterResult());
-    expect(adminClient.describeConfigs(describeBrokerRequest()))
-        .andReturn(describeBrokerResult(Collections.emptyList()));
   }
 
   @Test
@@ -122,7 +124,8 @@ public class KafkaTopicClientImplTest {
   @Test
   public void shouldUseExistingTopicWithTheSameSpecsInsteadOfCreate() {
     expect(adminClient.listTopics()).andReturn(getListTopicsResult());
-    expect(adminClient.describeTopics(anyObject())).andReturn(getDescribeTopicsResult());
+    expect(adminClient.describeTopics(anyObject(), anyObject()))
+        .andReturn(getDescribeTopicsResult());
     replay(adminClient);
 
     final KafkaTopicClient kafkaTopicClient = new KafkaTopicClientImpl(adminClient);
@@ -130,14 +133,32 @@ public class KafkaTopicClientImplTest {
     verify(adminClient);
   }
 
-  @Test(expected = KafkaTopicExistsException.class)
+  @Test
   public void shouldFailCreateExistingTopic() {
+    expectedException.expect(KafkaTopicExistsException.class);
+    expectedException.expectMessage("and 2 replication factor (topic has 1)");
+
+    expect(adminClient.describeCluster()).andReturn(describeClusterResult());
+    expect(adminClient.describeConfigs(describeBrokerRequest()))
+        .andReturn(describeBrokerResult(Collections.emptyList()));
     expect(adminClient.createTopics(anyObject())).andReturn(getCreateTopicsResult());
     expect(adminClient.listTopics()).andReturn(getListTopicsResult());
-    expect(adminClient.describeTopics(anyObject())).andReturn(getDescribeTopicsResult());
+    expect(adminClient.describeTopics(anyObject(), anyObject()))
+        .andReturn(getDescribeTopicsResult());
     replay(adminClient);
     final KafkaTopicClient kafkaTopicClient = new KafkaTopicClientImpl(adminClient);
     kafkaTopicClient.createTopic(topicName1, 1, (short) 2);
+    verify(adminClient);
+  }
+
+  @Test
+  public void shouldNotFailIfTopicAlreadyExistsButCreateUsesDefaultReplicas() {
+    expect(adminClient.listTopics()).andReturn(getListTopicsResult());
+    expect(adminClient.describeTopics(anyObject(), anyObject()))
+        .andReturn(getDescribeTopicsResult());
+    replay(adminClient);
+    final KafkaTopicClient kafkaTopicClient = new KafkaTopicClientImpl(adminClient);
+    kafkaTopicClient.createTopic(topicName1, 1, (short) -1);
     verify(adminClient);
   }
 
@@ -146,7 +167,8 @@ public class KafkaTopicClientImplTest {
     expect(adminClient.listTopics()).andReturn(getEmptyListTopicResult());
     expect(adminClient.createTopics(anyObject()))
         .andReturn(createTopicReturningTopicExistsException());
-    expect(adminClient.describeTopics(anyObject())).andReturn(getDescribeTopicsResult());
+    expect(adminClient.describeTopics(anyObject(), anyObject()))
+        .andReturn(getDescribeTopicsResult());
     replay(adminClient);
     final KafkaTopicClient kafkaTopicClient = new KafkaTopicClientImpl(adminClient);
     kafkaTopicClient.createTopic(topicName1, 1, (short) 1);
@@ -158,10 +180,11 @@ public class KafkaTopicClientImplTest {
     expect(adminClient.listTopics()).andReturn(getEmptyListTopicResult());
     expect(adminClient.createTopics(anyObject()))
         .andReturn(createTopicReturningTopicExistsException());
-    expect(adminClient.describeTopics(anyObject()))
+    expect(adminClient.describeTopics(anyObject(), anyObject()))
         .andReturn(describeTopicReturningUnknownPartitionException()).once();
     // The second time, return the right response.
-    expect(adminClient.describeTopics(anyObject())).andReturn(getDescribeTopicsResult()).once();
+    expect(adminClient.describeTopics(anyObject(), anyObject()))
+        .andReturn(getDescribeTopicsResult()).once();
     replay(adminClient);
     final KafkaTopicClient kafkaTopicClient = new KafkaTopicClientImpl(adminClient);
     kafkaTopicClient.createTopic(topicName1, 1, (short) 1);
@@ -171,7 +194,7 @@ public class KafkaTopicClientImplTest {
   @Test(expected = KafkaResponseGetFailedException.class)
   public void shouldFailToDescribeTopicsWhenRetriesExpire() {
     expect(adminClient.listTopics()).andReturn(getEmptyListTopicResult());
-    expect(adminClient.describeTopics(anyObject()))
+    expect(adminClient.describeTopics(anyObject(), anyObject()))
         .andReturn(describeTopicReturningUnknownPartitionException())
         .andReturn(describeTopicReturningUnknownPartitionException())
         .andReturn(describeTopicReturningUnknownPartitionException())
@@ -216,6 +239,9 @@ public class KafkaTopicClientImplTest {
 
   @Test
   public void shouldDeleteTopics() {
+    expect(adminClient.describeCluster()).andReturn(describeClusterResult());
+    expect(adminClient.describeConfigs(describeBrokerRequest()))
+        .andReturn(describeBrokerResult(Collections.emptyList()));
     expect(adminClient.deleteTopics(anyObject())).andReturn(getDeleteTopicsResult());
     replay(adminClient);
     final KafkaTopicClient kafkaTopicClient = new KafkaTopicClientImpl(adminClient);
@@ -238,6 +264,9 @@ public class KafkaTopicClientImplTest {
 
   @Test
   public void shouldDeleteInternalTopics() {
+    expect(adminClient.describeCluster()).andReturn(describeClusterResult());
+    expect(adminClient.describeConfigs(describeBrokerRequest()))
+        .andReturn(describeBrokerResult(Collections.emptyList()));
     expect(adminClient.listTopics()).andReturn(getListTopicsResultWithInternalTopics());
     expect(adminClient.deleteTopics(Arrays.asList(internalTopic2, internalTopic1)))
         .andReturn(getDeleteInternalTopicsResult());

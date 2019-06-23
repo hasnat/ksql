@@ -15,12 +15,14 @@
 
 package io.confluent.ksql.util;
 
+import com.google.common.base.Splitter;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import io.confluent.ksql.config.ConfigItem;
 import io.confluent.ksql.config.KsqlConfigResolver;
 import io.confluent.ksql.errors.LogMetricAndContinueExceptionHandler;
 import io.confluent.ksql.errors.ProductionExceptionHandlerUtil;
+import io.confluent.ksql.model.SemanticVersion;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
@@ -139,6 +141,19 @@ public class KsqlConfig extends AbstractConfig {
 
   public static final String KSQL_USE_LEGACY_KEY_FIELD = "ksql.query.fields.key.legacy";
 
+  public static final String KSQL_WRAP_SINGLE_VALUES =
+      "ksql.persistence.wrap.single.values";
+
+  public static final String KSQL_CUSTOM_METRICS_TAGS = "ksql.metrics.tags.custom";
+  private static final String KSQL_CUSTOM_METRICS_TAGS_DOC =
+      "A list of tags to be included with emitted JMX metrics, formatted as a string of key:value "
+      + "pairs separated by commas. For example, 'key1:value1,key2:value2'.";
+
+  public static final String KSQL_CUSTOM_METRICS_EXTENSION = "ksql.metrics.extension";
+  private static final String KSQL_CUSTOM_METRICS_EXTENSION_DOC =
+      "Extension for supplying custom metrics to be emitted along with "
+      + "the engine's default JMX metrics";
+
   public static final String
       defaultSchemaRegistryUrl = "http://localhost:8081";
 
@@ -147,9 +162,16 @@ public class KsqlConfig extends AbstractConfig {
   public static final String KSQL_COLLECT_UDF_METRICS = "ksql.udf.collect.metrics";
   public static final String KSQL_UDF_SECURITY_MANAGER_ENABLED = "ksql.udf.enable.security.manager";
 
+  public static final String KSQL_INSERT_INTO_VALUES_ENABLED = "ksql.insert.into.values.enabled";
+
   public static final String DEFAULT_EXT_DIR = "ext";
 
-  private static final Collection<CompatibilityBreakingConfigDef> COMPATIBLY_BREAKING_CONFIG_DEFS
+  public static final String KSQL_SECURITY_EXTENSION_CLASS = "ksql.security.extension.class";
+  public static final String KSQL_SECURITY_EXTENSION_DEFAULT = null;
+  public static final String KSQL_SECURITY_EXTENSION_DOC = "A KSQL security extension class that "
+      + "provides authorization to KSQL servers.";
+
+  public static final Collection<CompatibilityBreakingConfigDef> COMPATIBLY_BREAKING_CONFIG_DEFS
       = ImmutableList.of(
           new CompatibilityBreakingConfigDef(
               KSQL_PERSISTENT_QUERY_NAME_PREFIX_CONFIG,
@@ -157,6 +179,7 @@ public class KsqlConfig extends AbstractConfig {
               KSQL_PERSISTENT_QUERY_NAME_PREFIX_DEFAULT,
               KSQL_PERSISTENT_QUERY_NAME_PREFIX_DEFAULT,
               ConfigDef.Importance.MEDIUM,
+              Optional.empty(),
               "Second part of the prefix for persistent queries. For instance if "
                   + "the prefix is query_ the query name will be ksql_query_1."),
           new CompatibilityBreakingConfigDef(
@@ -165,6 +188,7 @@ public class KsqlConfig extends AbstractConfig {
               true,
               false,
               ConfigDef.Importance.LOW,
+              Optional.empty(),
               KSQL_FUNCTIONS_SUBSTRING_LEGACY_ARGS_DOCS),
           new CompatibilityBreakingConfigDef(
               KSQL_WINDOWED_SESSION_KEY_LEGACY_CONFIG,
@@ -172,6 +196,7 @@ public class KsqlConfig extends AbstractConfig {
               true,
               false,
               ConfigDef.Importance.LOW,
+              Optional.empty(),
               KSQL_WINDOWED_SESSION_KEY_LEGACY_DOC),
           new CompatibilityBreakingConfigDef(
               KSQL_ACTIVE_PERSISTENT_QUERY_LIMIT_CONFIG,
@@ -179,6 +204,7 @@ public class KsqlConfig extends AbstractConfig {
               KSQL_ACTIVE_PERSISTENT_QUERY_LIMIT_DEFAULT,
               KSQL_ACTIVE_PERSISTENT_QUERY_LIMIT_DEFAULT,
               ConfigDef.Importance.LOW,
+              Optional.empty(),
               KSQL_ACTIVE_PERSISTENT_QUERY_LIMIT_DOC),
           new CompatibilityBreakingConfigDef(
               KSQL_USE_NAMED_INTERNAL_TOPICS,
@@ -187,6 +213,7 @@ public class KsqlConfig extends AbstractConfig {
               KSQL_USE_NAMED_INTERNAL_TOPICS_ON,
               ConfigDef.Importance.LOW,
               KSQL_USE_NAMED_INTERNAL_TOPICS_DOC,
+              Optional.empty(),
               KSQL_USE_NAMED_INTERNAL_TOPICS_VALIDATOR),
           new CompatibilityBreakingConfigDef(
               SINK_NUMBER_OF_PARTITIONS_PROPERTY,
@@ -194,6 +221,7 @@ public class KsqlConfig extends AbstractConfig {
               4,
               null,
               Importance.LOW,
+              Optional.empty(),
               "The legacy default number of partitions for the topics created by KSQL"
                   + "in 5.2 and earlier versions."
                   + "This property should not be set for 5.3 and later versions."),
@@ -203,6 +231,7 @@ public class KsqlConfig extends AbstractConfig {
               (short) 1,
               null,
               ConfigDef.Importance.LOW,
+              Optional.empty(),
               "The default number of replicas for the topics created by KSQL "
                   + "in 5.2 and earlier versions."
                   + "This property should not be set for 5.3 and later versions."
@@ -213,6 +242,7 @@ public class KsqlConfig extends AbstractConfig {
               false,
               true,
               ConfigDef.Importance.LOW,
+              Optional.empty(),
               KSQL_USE_NAMED_AVRO_MAPS_DOC
           ),
           new CompatibilityBreakingConfigDef(
@@ -221,6 +251,7 @@ public class KsqlConfig extends AbstractConfig {
               true,
               false,
               ConfigDef.Importance.LOW,
+              Optional.empty(),
               "Determines if the legacy key field is used when building queries. "
                   + "This setting is automatically applied for persistent queries started by "
                   + "older versions of KSQL. "
@@ -233,22 +264,34 @@ public class KsqlConfig extends AbstractConfig {
     CURRENT
   }
 
-  private static class CompatibilityBreakingConfigDef {
+  public static class CompatibilityBreakingConfigDef {
     private final String name;
     private final ConfigDef.Type type;
     private final Object defaultValueLegacy;
     private final Object defaultValueCurrent;
     private final ConfigDef.Importance importance;
     private final String documentation;
+    private final Optional<SemanticVersion> since;
     private final Validator validator;
 
-    CompatibilityBreakingConfigDef(final String name,
+    CompatibilityBreakingConfigDef(
+        final String name,
         final ConfigDef.Type type,
         final Object defaultValueLegacy,
         final Object defaultValueCurrent,
         final ConfigDef.Importance importance,
-        final String documentation) {
-      this(name, type, defaultValueLegacy, defaultValueCurrent, importance, documentation, null);
+        final Optional<SemanticVersion> since,
+        final String documentation
+    ) {
+      this(
+          name,
+          type,
+          defaultValueLegacy,
+          defaultValueCurrent,
+          importance,
+          documentation,
+          since,
+          null);
     }
 
     CompatibilityBreakingConfigDef(
@@ -258,18 +301,29 @@ public class KsqlConfig extends AbstractConfig {
         final Object defaultValueCurrent,
         final ConfigDef.Importance importance,
         final String documentation,
-        final Validator validator) {
-      this.name = name;
-      this.type = type;
+        final Optional<SemanticVersion> since,
+        final Validator validator
+    ) {
+      this.name = Objects.requireNonNull(name, "name");
+      this.type = Objects.requireNonNull(type, "type");
       this.defaultValueLegacy = defaultValueLegacy;
       this.defaultValueCurrent = defaultValueCurrent;
-      this.importance = importance;
-      this.documentation = documentation;
+      this.importance = Objects.requireNonNull(importance, "importance");
+      this.documentation = Objects.requireNonNull(documentation, "documentation");
+      this.since = Objects.requireNonNull(since, "since");
       this.validator = validator;
     }
 
     public String getName() {
       return this.name;
+    }
+
+    public Optional<SemanticVersion> since() {
+      return since;
+    }
+
+    public Object getCurrentDefaultValue() {
+      return defaultValueCurrent;
     }
 
     private void define(final ConfigDef configDef, final Object defaultValue) {
@@ -395,6 +449,50 @@ public class KsqlConfig extends AbstractConfig {
             ConfigDef.Importance.LOW,
             "Enable the security manager for UDFs. Default is true and will stop UDFs from"
                + " calling System.exit or executing processes"
+        ).define(
+            KSQL_INSERT_INTO_VALUES_ENABLED,
+            Type.BOOLEAN,
+            true,
+            ConfigDef.Importance.LOW,
+            "Enable the INSERT INTO ... VALUES functionality."
+        ).define(
+            KSQL_SECURITY_EXTENSION_CLASS,
+            Type.CLASS,
+            KSQL_SECURITY_EXTENSION_DEFAULT,
+            ConfigDef.Importance.LOW,
+            KSQL_SECURITY_EXTENSION_DOC
+        ).define(
+            KSQL_WRAP_SINGLE_VALUES,
+            ConfigDef.Type.BOOLEAN,
+            true,
+            ConfigDef.Importance.LOW,
+            "Controls how KSQL will serialize a value whose schema contains only a "
+                + "single column. The setting only sets the default for `CREATE STREAM`, "
+                + "`CREATE TABLE`, `CREATE STREAM AS SELECT`, `CREATE TABLE AS SELECT` and "
+                + "`INSERT INTO` statements, where `WRAP_SINGLE_VALUE` is not provided explicitly "
+                + "in the statement." + System.lineSeparator()
+                + "When set to true, KSQL will persist the single column nested with a STRUCT, "
+                + "for formats that support them. When set to false KSQL will persist "
+                + "the column as the anonymous values." + System.lineSeparator()
+                + "For example, if the value contains only a single column 'FOO INT' and the "
+                + "format is JSON,  and this setting is `false`, then KSQL will persist the value "
+                + "as an unnamed JSON number, e.g. '10'. Where as, if this setting is `true`, KSQL "
+                + "will persist the value as a JSON document with a single numeric property, "
+                + "e.g. '{\"FOO\": 10}." + System.lineSeparator()
+                + "Note: the DELIMITED format ignores this setting as it does not support the "
+                + "concept of a STRUCT, record or object."
+        ).define(
+            KSQL_CUSTOM_METRICS_TAGS,
+            ConfigDef.Type.STRING,
+            "",
+            ConfigDef.Importance.LOW,
+            KSQL_CUSTOM_METRICS_TAGS_DOC
+        ).define(
+            KSQL_CUSTOM_METRICS_EXTENSION,
+            ConfigDef.Type.CLASS,
+            null,
+            ConfigDef.Importance.LOW,
+            KSQL_CUSTOM_METRICS_EXTENSION_DOC
         )
         .withClientSslSupport();
     for (final CompatibilityBreakingConfigDef compatibilityBreakingConfigDef
@@ -630,6 +728,22 @@ public class KsqlConfig extends AbstractConfig {
         .forEach(
             k -> mergedStreamConfigProps.put(k, originalConfig.ksqlStreamConfigProps.get(k)));
     return new KsqlConfig(ConfigGeneration.LEGACY, mergedProperties, mergedStreamConfigProps);
+  }
+
+  public Map<String, String> getStringAsMap(final String key) {
+    final String value = getString(key).trim();
+    try {
+      return value.equals("")
+          ? Collections.emptyMap()
+          : Splitter.on(",").trimResults().withKeyValueSeparator(":").split(value);
+    } catch (IllegalArgumentException e) {
+      throw new KsqlException(
+          String.format(
+              "Invalid config value for '%s'. value: %s. reason: %s",
+              key,
+              value,
+              e.getMessage()));
+    }
   }
 
   private static Set<String> sslConfigNames() {

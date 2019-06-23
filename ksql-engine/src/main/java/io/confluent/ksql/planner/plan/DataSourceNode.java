@@ -17,8 +17,6 @@ package io.confluent.ksql.planner.plan;
 
 import static java.util.Objects.requireNonNull;
 
-import com.fasterxml.jackson.annotation.JsonCreator;
-import com.fasterxml.jackson.annotation.JsonProperty;
 import com.google.common.annotations.VisibleForTesting;
 import io.confluent.ksql.GenericRow;
 import io.confluent.ksql.metastore.model.DataSource;
@@ -29,8 +27,10 @@ import io.confluent.ksql.metastore.model.KsqlTable;
 import io.confluent.ksql.metastore.model.KsqlTopic;
 import io.confluent.ksql.physical.AddTimestampColumn;
 import io.confluent.ksql.physical.KsqlQueryBuilder;
-import io.confluent.ksql.schema.ksql.KsqlSchema;
-import io.confluent.ksql.serde.KsqlTopicSerDe;
+import io.confluent.ksql.schema.ksql.LogicalSchema;
+import io.confluent.ksql.schema.ksql.PhysicalSchema;
+import io.confluent.ksql.serde.KsqlSerdeFactory;
+import io.confluent.ksql.serde.SerdeOption;
 import io.confluent.ksql.services.KafkaTopicClient;
 import io.confluent.ksql.streams.MaterializedFactory;
 import io.confluent.ksql.streams.StreamsUtil;
@@ -90,15 +90,15 @@ public class DataSourceNode
   private static final String REDUCE_OP_NAME = "reduce";
 
   private final DataSource<?> dataSource;
-  private final KsqlSchema schema;
+  private final String alias;
+  private final LogicalSchema schema;
   private final KeyField keyField;
   private final Function<KsqlConfig, MaterializedFactory> materializedFactorySupplier;
 
-  @JsonCreator
   public DataSourceNode(
-      @JsonProperty("id") final PlanNodeId id,
-      @JsonProperty("dataSource") final DataSource<?> dataSource,
-      @JsonProperty("alias") final String alias
+      final PlanNodeId id,
+      final DataSource<?> dataSource,
+      final String alias
   ) {
     this(id, dataSource, alias, MaterializedFactory::create);
   }
@@ -112,6 +112,7 @@ public class DataSourceNode
   ) {
     super(id, dataSource.getDataSourceType());
     this.dataSource = requireNonNull(dataSource, "dataSource");
+    this.alias = requireNonNull(alias, "alias");
     this.schema = dataSource.getSchema()
       .withAlias(alias);
 
@@ -131,7 +132,7 @@ public class DataSourceNode
   }
 
   @Override
-  public KsqlSchema getSchema() {
+  public LogicalSchema getSchema() {
     return schema;
   }
 
@@ -142,6 +143,10 @@ public class DataSourceNode
 
   public DataSource<?> getDataSource() {
     return dataSource;
+  }
+
+  public String getAlias() {
+    return alias;
   }
 
   @Override
@@ -171,15 +176,16 @@ public class DataSourceNode
     final TimestampExtractor timestampExtractor = getTimestampExtractionPolicy()
         .create(timeStampColumnIndex);
 
-    final KsqlTopicSerDe ksqlTopicSerDe = getDataSource()
+    final KsqlSerdeFactory valueSerdeFactory = getDataSource()
         .getKsqlTopic()
-        .getKsqlTopicSerDe();
+        .getValueSerdeFactory();
 
     final Serde<GenericRow> streamSerde = builder.buildGenericRowSerde(
-        ksqlTopicSerDe,
-        schema.withoutAlias()
-            .withoutImplicitFields()
-            .getSchema(),
+        valueSerdeFactory,
+        PhysicalSchema.from(
+            dataSource.getSchema().withoutImplicitAndKeyFieldsInValue(),
+            dataSource.getSerdeOptions()
+        ),
         contextStacker.push(SOURCE_OP_NAME).getQueryContext()
     );
 
@@ -188,8 +194,8 @@ public class DataSourceNode
       final QueryContext.Stacker reduceContextStacker = contextStacker.push(REDUCE_OP_NAME);
 
       final Serde<GenericRow> aggregateSerde = builder.buildGenericRowSerde(
-          ksqlTopicSerDe,
-          schema.getSchema(),
+          valueSerdeFactory,
+          PhysicalSchema.from(schema, SerdeOption.none()),
           reduceContextStacker.getQueryContext()
       );
 
@@ -258,8 +264,8 @@ public class DataSourceNode
         return index;
       }
     } else {
-      for (int i = 2; i < schema.fields().size(); i++) {
-        final Field field = schema.fields().get(i);
+      for (int i = 2; i < schema.valueFields().size(); i++) {
+        final Field field = schema.valueFields().get(i);
         if (field.name().contains(".")) {
           if (timestampFieldName.equals(field.name().substring(field.name().indexOf(".") + 1))) {
             return i - 2;
@@ -275,8 +281,8 @@ public class DataSourceNode
   }
 
   private Integer findMatchingTimestampField(final String timestampFieldName) {
-    for (int i = 2; i < schema.fields().size(); i++) {
-      final Field field = schema.fields().get(i);
+    for (int i = 2; i < schema.valueFields().size(); i++) {
+      final Field field = schema.valueFields().get(i);
       if (field.name().contains(".")) {
         if (timestampFieldName.equals(field.name())) {
           return i - 2;

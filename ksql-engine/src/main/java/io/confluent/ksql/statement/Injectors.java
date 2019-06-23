@@ -16,8 +16,8 @@
 package io.confluent.ksql.statement;
 
 import io.confluent.ksql.KsqlExecutionContext;
-import io.confluent.ksql.schema.inference.DefaultSchemaInjector;
-import io.confluent.ksql.schema.inference.SchemaRegistryTopicSchemaSupplier;
+import io.confluent.ksql.schema.ksql.inference.DefaultSchemaInjector;
+import io.confluent.ksql.schema.ksql.inference.SchemaRegistryTopicSchemaSupplier;
 import io.confluent.ksql.services.ServiceContext;
 import io.confluent.ksql.topic.TopicCreateInjector;
 import io.confluent.ksql.topic.TopicDeleteInjector;
@@ -29,12 +29,12 @@ public enum Injectors implements BiFunction<KsqlExecutionContext, ServiceContext
   NO_TOPIC_DELETE((ec, sc) -> InjectorChain.of(
       new DefaultSchemaInjector(
           new SchemaRegistryTopicSchemaSupplier(sc.getSchemaRegistryClient())),
-      new TopicCreateInjector(ec)
+      new TopicCreateInjector(ec, sc)
   )),
 
   DEFAULT((ec, sc) -> InjectorChain.of(
       NO_TOPIC_DELETE.apply(ec, sc),
-      new TopicDeleteInjector(ec)
+      new TopicDeleteInjector(ec, sc)
   ))
   ;
 

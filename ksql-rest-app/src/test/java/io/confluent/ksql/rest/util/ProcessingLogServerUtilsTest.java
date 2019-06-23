@@ -40,7 +40,7 @@ import io.confluent.ksql.metastore.model.DataSource;
 import io.confluent.ksql.metastore.model.KsqlStream;
 import io.confluent.ksql.parser.KsqlParser.PreparedStatement;
 import io.confluent.ksql.parser.SqlFormatter;
-import io.confluent.ksql.serde.json.KsqlJsonTopicSerDe;
+import io.confluent.ksql.serde.json.KsqlJsonSerdeFactory;
 import io.confluent.ksql.services.KafkaTopicClient;
 import io.confluent.ksql.services.ServiceContext;
 import io.confluent.ksql.services.TestServiceContext;
@@ -152,10 +152,10 @@ public class ProcessingLogServerUtilsTest {
     assertThat(dataSource, instanceOf(KsqlStream.class));
     final KsqlStream<?> stream = (KsqlStream) dataSource;
     final Schema expected = ProcessingLogServerUtils.getMessageSchema();
-    assertThat(stream.getKsqlTopicSerde(), instanceOf(KsqlJsonTopicSerDe.class));
+    assertThat(stream.getValueSerdeFactory(), instanceOf(KsqlJsonSerdeFactory.class));
     assertThat(stream.getKsqlTopic().getKafkaTopicName(), equalTo(topicName));
     assertThat(
-        stream.getSchema().fields().stream().map(Field::name).collect(toList()),
+        stream.getSchema().valueFields().stream().map(Field::name).collect(toList()),
         equalTo(
             new ImmutableList.Builder<String>()
                 .add("ROWTIME")
@@ -170,7 +170,7 @@ public class ProcessingLogServerUtilsTest {
     expected.fields().forEach(
         f -> assertLogSchema(
             f.schema(),
-            stream.getSchema().getSchema().field(f.name().toUpperCase()).schema(),
+            stream.getSchema().valueSchema().field(f.name().toUpperCase()).schema(),
             ImmutableList.of(f.name())));
   }
 

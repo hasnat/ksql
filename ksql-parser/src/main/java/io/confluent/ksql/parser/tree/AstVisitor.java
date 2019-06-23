@@ -208,6 +208,11 @@ public abstract class AstVisitor<R, C> {
     return visitNode(node, context);
   }
 
+
+  protected R visitDecimal(final Decimal node, final C context) {
+    return visitNode(node, context);
+  }
+
   protected R visitAliasedRelation(final AliasedRelation node, final C context) {
     return visitRelation(node, context);
   }
@@ -248,10 +253,6 @@ public abstract class AstVisitor<R, C> {
     return visitNode(node, context);
   }
 
-  protected R visitCreateTopic(final RegisterTopic node, final C context) {
-    return visitStatement(node, context);
-  }
-
   protected R visitCreateStream(final CreateStream node, final C context) {
     return visitStatement(node, context);
   }
@@ -273,10 +274,6 @@ public abstract class AstVisitor<R, C> {
   }
 
   protected R visitInsertValues(final InsertValues node, final C context) {
-    return visitStatement(node, context);
-  }
-
-  protected R visitDropTopic(final DropTopic node, final C context) {
     return visitStatement(node, context);
   }
 

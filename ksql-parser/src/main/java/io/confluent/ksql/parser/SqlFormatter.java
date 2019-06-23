@@ -50,7 +50,6 @@ import io.confluent.ksql.parser.tree.Table;
 import io.confluent.ksql.parser.tree.TableElement;
 import io.confluent.ksql.util.ParserUtil;
 import java.util.List;
-import java.util.Map;
 import java.util.Optional;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
@@ -137,14 +136,7 @@ public final class SqlFormatter {
     protected Void visitSelect(final Select node, final Integer indent) {
       append(indent, "SELECT");
 
-      final List<SelectItem> selectItems = node.getSelectItems()
-          .stream()
-          .map(item ->
-              (item instanceof SingleColumn)
-                  ? ((SingleColumn) item).getAllColumns().map(SelectItem.class::cast).orElse(item)
-                  : item)
-          .distinct()
-          .collect(Collectors.toList());
+      final List<SelectItem> selectItems = node.getSelectItems();
 
       if (selectItems.size() > 1) {
         boolean first = true;
@@ -169,13 +161,10 @@ public final class SqlFormatter {
     @Override
     protected Void visitSingleColumn(final SingleColumn node, final Integer indent) {
       builder.append(ExpressionFormatter.formatExpression(node.getExpression()));
-      if (node.getAlias().isPresent()) {
-        builder.append(' ')
+      builder.append(' ')
                 .append('"')
-                .append(node.getAlias().get())
-                .append('"'); // TODO: handle quoting properly
-      }
-
+                .append(node.getAlias())
+                .append('"');
       return null;
     }
 
@@ -246,20 +235,9 @@ public final class SqlFormatter {
         }
         builder.append(")");
       }
-      if (!node.getProperties().isEmpty()) {
-        builder.append(" WITH (");
-        boolean addComma = false;
-        for (final Map.Entry property: node.getProperties().entrySet()) {
-          if (addComma) {
-            builder.append(", ");
-          } else {
-            addComma = true;
-          }
-          builder.append(property.getKey().toString()).append("=").append(property.getValue()
-                                                                              .toString());
-        }
-        builder.append(");");
-      }
+      builder.append(" WITH (");
+      builder.append(node.getProperties());
+      builder.append(");");
       return null;
     }
 
@@ -285,16 +263,7 @@ public final class SqlFormatter {
               .append(tableElement.getType());
         }
         builder.append(")").append(" WITH (");
-        addComma = false;
-        for (final Map.Entry property: node.getProperties().entrySet()) {
-          if (addComma) {
-            builder.append(", ");
-          } else {
-            addComma = true;
-          }
-          builder.append(property.getKey().toString()).append("=").append(property.getValue()
-                                                                              .toString());
-        }
+        builder.append(node.getProperties());
         builder.append(");");
       }
       return null;

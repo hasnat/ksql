@@ -15,9 +15,18 @@
 
 package io.confluent.ksql.rest.server.context;
 
+import io.confluent.kafka.schemaregistry.client.SchemaRegistryClient;
+import io.confluent.ksql.schema.registry.KsqlSchemaRegistryClientFactory;
 import io.confluent.ksql.services.DefaultServiceContext;
 import io.confluent.ksql.services.ServiceContext;
 import io.confluent.ksql.util.KsqlConfig;
+import java.util.Objects;
+import java.util.Optional;
+import java.util.function.Supplier;
+import javax.inject.Inject;
+import javax.ws.rs.container.ContainerRequestContext;
+import org.apache.kafka.streams.KafkaClientSupplier;
+import org.apache.kafka.streams.processor.internals.DefaultKafkaClientSupplier;
 import org.glassfish.hk2.api.Factory;
 
 /**
@@ -25,15 +34,44 @@ import org.glassfish.hk2.api.Factory;
  * a new {@link ServiceContext} during REST requests.
  */
 public class KsqlRestServiceContextFactory implements Factory<ServiceContext> {
-  private final KsqlConfig ksqlConfig;
+  private static KsqlConfig ksqlConfig;
 
-  public KsqlRestServiceContextFactory(final KsqlConfig ksqlConfig) {
-    this.ksqlConfig = ksqlConfig;
+  public static void configure(final KsqlConfig ksqlConfig) {
+    KsqlRestServiceContextFactory.ksqlConfig = Objects.requireNonNull(ksqlConfig, "ksqlConfig");
+  }
+
+  private final Optional<KsqlRestContext> ksqlRestContext;
+
+  @Inject
+  public KsqlRestServiceContextFactory(final ContainerRequestContext requestContext) {
+    this.ksqlRestContext = KsqlRestContext.get(requestContext);
   }
 
   @Override
   public ServiceContext provide() {
+    if (ksqlRestContext.isPresent()) {
+      return DefaultServiceContext.create(
+          ksqlConfig,
+          getKafkaClientSupplier(),
+          getSchemaRegistryClientSupplier()
+      );
+    }
+
     return DefaultServiceContext.create(ksqlConfig);
+  }
+
+  private KafkaClientSupplier getKafkaClientSupplier() {
+    return new ConfiguredKafkaClientSupplier(
+        new DefaultKafkaClientSupplier(),
+        ksqlRestContext.get().getKafkaClientSupplierProperties()
+    );
+  }
+
+  private Supplier<SchemaRegistryClient> getSchemaRegistryClientSupplier() {
+    return new KsqlSchemaRegistryClientFactory(
+        ksqlConfig,
+        ksqlRestContext.get().getSchemaRegistryClientHttpHeaders()
+    )::get;
   }
 
   @Override

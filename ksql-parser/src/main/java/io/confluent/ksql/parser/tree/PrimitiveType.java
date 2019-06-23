@@ -17,6 +17,7 @@ package io.confluent.ksql.parser.tree;
 
 import com.google.common.collect.ImmutableMap;
 import com.google.errorprone.annotations.Immutable;
+import io.confluent.ksql.schema.ksql.SqlType;
 import io.confluent.ksql.util.KsqlException;
 import java.util.Objects;
 import java.util.Optional;
@@ -83,5 +84,10 @@ public final class PrimitiveType extends Type {
   @Override
   public int hashCode() {
     return Objects.hash(getSqlType());
+  }
+
+  @Override
+  public boolean supportsCast() {
+    return true;
   }
 }

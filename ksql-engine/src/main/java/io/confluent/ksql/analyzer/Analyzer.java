@@ -16,7 +16,10 @@
 package io.confluent.ksql.analyzer;
 
 import static java.lang.String.format;
+import static java.util.Objects.requireNonNull;
 
+import com.google.common.annotations.VisibleForTesting;
+import com.google.common.collect.ImmutableSet;
 import io.confluent.ksql.analyzer.Analysis.Into;
 import io.confluent.ksql.ddl.DdlConfig;
 import io.confluent.ksql.metastore.MetaStore;
@@ -33,7 +36,9 @@ import io.confluent.ksql.parser.tree.GroupBy;
 import io.confluent.ksql.parser.tree.GroupingElement;
 import io.confluent.ksql.parser.tree.Join;
 import io.confluent.ksql.parser.tree.JoinOn;
+import io.confluent.ksql.parser.tree.Literal;
 import io.confluent.ksql.parser.tree.Node;
+import io.confluent.ksql.parser.tree.NodeLocation;
 import io.confluent.ksql.parser.tree.QualifiedName;
 import io.confluent.ksql.parser.tree.QualifiedNameReference;
 import io.confluent.ksql.parser.tree.Query;
@@ -41,25 +46,23 @@ import io.confluent.ksql.parser.tree.Select;
 import io.confluent.ksql.parser.tree.SelectItem;
 import io.confluent.ksql.parser.tree.SingleColumn;
 import io.confluent.ksql.parser.tree.Sink;
+import io.confluent.ksql.parser.tree.StringLiteral;
 import io.confluent.ksql.parser.tree.Table;
 import io.confluent.ksql.parser.tree.WindowExpression;
 import io.confluent.ksql.planner.plan.DataSourceNode;
 import io.confluent.ksql.planner.plan.JoinNode;
 import io.confluent.ksql.planner.plan.PlanNodeId;
-import io.confluent.ksql.schema.ksql.KsqlSchema;
+import io.confluent.ksql.schema.ksql.LogicalSchema;
 import io.confluent.ksql.serde.Format;
-import io.confluent.ksql.serde.KsqlTopicSerDe;
-import io.confluent.ksql.serde.avro.KsqlAvroTopicSerDe;
-import io.confluent.ksql.serde.delimited.KsqlDelimitedTopicSerDe;
-import io.confluent.ksql.serde.json.KsqlJsonTopicSerDe;
-import io.confluent.ksql.util.KsqlConfig;
+import io.confluent.ksql.serde.KsqlSerdeFactories;
+import io.confluent.ksql.serde.KsqlSerdeFactory;
+import io.confluent.ksql.serde.SerdeFactories;
+import io.confluent.ksql.serde.SerdeOption;
+import io.confluent.ksql.serde.SerdeOptions;
 import io.confluent.ksql.util.KsqlConstants;
 import io.confluent.ksql.util.KsqlException;
-import io.confluent.ksql.util.Pair;
 import io.confluent.ksql.util.SchemaUtil;
 import io.confluent.ksql.util.StringUtil;
-import io.confluent.ksql.util.WithClauseUtil;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -72,259 +75,245 @@ import org.apache.kafka.connect.data.Field;
 class Analyzer {
   // CHECKSTYLE_RULES.ON: ClassDataAbstractionCoupling
 
-  private final String sqlExpression;
-  private final Analysis analysis;
+  private static final Set<String> VALID_WITH_PROPS = ImmutableSet.<String>builder()
+      .add(DdlConfig.VALUE_FORMAT_PROPERTY.toUpperCase())
+      .add(DdlConfig.KAFKA_TOPIC_NAME_PROPERTY.toUpperCase())
+      .add(DdlConfig.PARTITION_BY_PROPERTY.toUpperCase())
+      .add(KsqlConstants.SINK_TIMESTAMP_COLUMN_NAME.toUpperCase())
+      .add(KsqlConstants.SINK_NUMBER_OF_PARTITIONS.toUpperCase())
+      .add(KsqlConstants.SINK_NUMBER_OF_REPLICAS.toUpperCase())
+      .add(DdlConfig.TIMESTAMP_FORMAT_PROPERTY.toUpperCase())
+      .add(DdlConfig.VALUE_AVRO_SCHEMA_FULL_NAME.toUpperCase())
+      .add(DdlConfig.WRAP_SINGLE_VALUE.toUpperCase())
+      .build();
+
   private final MetaStore metaStore;
   private final String topicPrefix;
+  private final SerdeFactories serdeFactories;
+  private final SerdeOptionsSupplier serdeOptionsSupplier;
+  private final Set<SerdeOption> defaultSerdeOptions;
 
   /**
-   * @param sqlExpression the sql expression to analyse
-   * @param analysis      where the results are stored.
-   * @param metaStore     the metastore to use.
-   * @param topicPrefix   the prefix to use for topic names where an explicit name is not specified.
+   * @param metaStore the metastore to use.
+   * @param topicPrefix the prefix to use for topic names where an explicit name is not specified.
+   * @param defaultSerdeOptions the default serde options.
    */
   Analyzer(
-      final String sqlExpression,
-      final Analysis analysis,
       final MetaStore metaStore,
-      final String topicPrefix
+      final String topicPrefix,
+      final Set<SerdeOption> defaultSerdeOptions
   ) {
-    this.sqlExpression = Objects.requireNonNull(sqlExpression, "sqlExpression");
-    this.analysis = Objects.requireNonNull(analysis, "analysis");
-    this.metaStore = Objects.requireNonNull(metaStore, "metaStore");
-    this.topicPrefix = Objects.requireNonNull(topicPrefix, "topicPrefix");
+    this(
+        metaStore,
+        topicPrefix,
+        defaultSerdeOptions,
+        new KsqlSerdeFactories(),
+        SerdeOptions::buildForCreateAsStatement);
+  }
+
+  @VisibleForTesting
+  Analyzer(
+      final MetaStore metaStore,
+      final String topicPrefix,
+      final Set<SerdeOption> defaultSerdeOptions,
+      final SerdeFactories serdeFactories,
+      final SerdeOptionsSupplier serdeOptionsSupplier
+  ) {
+    this.metaStore = requireNonNull(metaStore, "metaStore");
+    this.topicPrefix = requireNonNull(topicPrefix, "topicPrefix");
+    this.defaultSerdeOptions = ImmutableSet
+        .copyOf(requireNonNull(defaultSerdeOptions, "defaultSerdeOptions"));
+    this.serdeFactories = requireNonNull(serdeFactories, "serdeFactories");
+    this.serdeOptionsSupplier = requireNonNull(serdeOptionsSupplier, "serdeOptionsSupplier");
   }
 
   /**
    * Analyze the query.
    *
+   * @param sqlExpression the sql expression being analysed.
    * @param query the query to analyze.
    * @param sink the sink the query will output to.
+   * @return the analysis.
    */
-  void analyze(final Query query, final Optional<Sink> sink) {
-    new Visitor().process(query, null);
+  Analysis analyze(
+      final String sqlExpression,
+      final Query query,
+      final Optional<Sink> sink
+  ) {
+    final Visitor visitor = new Visitor();
+    visitor.process(query, null);
 
-    analyzeSink(sink);
-  }
+    visitor.analyzeSink(sink, sqlExpression);
 
-  private void analyzeSink(final Optional<Sink> sink) {
-    sink.ifPresent(this::analyzeNonStdOutSink);
-  }
-
-  private void setIntoProperties(final Sink sink) {
-
-    validateWithClause(sink.getProperties().keySet());
-
-    setIntoTopicFormat(sink);
-
-    if (sink.getProperties().get(DdlConfig.KAFKA_TOPIC_NAME_PROPERTY) != null) {
-      setIntoTopicName(sink);
-    }
-
-    if (sink.getProperties().get(DdlConfig.PARTITION_BY_PROPERTY) != null) {
-      final String intoPartitionByColumnName = sink.getProperties()
-          .get(DdlConfig.PARTITION_BY_PROPERTY)
-          .toString()
-          .toUpperCase();
-      analysis.getIntoProperties().put(
-          DdlConfig.PARTITION_BY_PROPERTY,
-          intoPartitionByColumnName
-      );
-    }
-
-    if (sink.getProperties().get(KsqlConstants.SINK_TIMESTAMP_COLUMN_NAME) != null) {
-      setIntoTimestampColumnAndFormat(sink);
-    }
-
-    if (sink.getProperties().get(KsqlConstants.SINK_NUMBER_OF_PARTITIONS) != null) {
-      final int numberOfPartitions =
-          WithClauseUtil.parsePartitions(
-              sink.getProperties().get(KsqlConstants.SINK_NUMBER_OF_PARTITIONS).toString());
-
-      analysis.getIntoProperties().put(
-          KsqlConfig.SINK_NUMBER_OF_PARTITIONS_PROPERTY,
-          numberOfPartitions
-      );
-    }
-
-    if (sink.getProperties().get(KsqlConstants.SINK_NUMBER_OF_REPLICAS) != null) {
-      final short numberOfReplications =
-          WithClauseUtil.parseReplicas(
-              sink.getProperties().get(KsqlConstants.SINK_NUMBER_OF_REPLICAS).toString());
-      analysis.getIntoProperties()
-          .put(KsqlConfig.SINK_NUMBER_OF_REPLICAS_PROPERTY, numberOfReplications);
-    }
-  }
-
-  private void analyzeNonStdOutSink(final Sink sink) {
-    setIntoProperties(sink);
-
-    if (!sink.shouldCreateSink()) {
-      final DataSource<?> existing = metaStore.getSource(sink.getName());
-      if (existing == null) {
-        throw new KsqlException("Unknown source: " + sink.getName());
-      }
-
-      if (metaStore.getTopic(sink.getName()) == null) {
-        throw new KsqlException(
-            "Sink topic " + sink.getName() + " does not exist in the metastore.");
-      }
-
-      analysis.setInto(Into.of(
-          sqlExpression,
-          sink.getName(),
-          false,
-          existing.getKsqlTopic(),
-          existing.getKeySerdeFactory()
-      ));
-      return;
-    }
-
-    final String intoKafkaTopicName = analysis.getIntoKafkaTopicName() == null
-        ? topicPrefix + sink.getName()
-        : analysis.getIntoKafkaTopicName();
-
-    final KsqlTopic intoKsqlTopic = new KsqlTopic(
-        sink.getName(),
-        intoKafkaTopicName,
-        getIntoValueSerde(),
-        true
-    );
-
-    analysis.setInto(Into.of(
-        sqlExpression,
-        sink.getName(),
-        true,
-        intoKsqlTopic,
-        Serdes::String
-    ));
-  }
-
-  private KsqlTopicSerDe getIntoValueSerde() {
-    final List<Pair<DataSource<?>, String>> fromDataSources = analysis
-        .getFromDataSources();
-
-    if (analysis.getIntoFormat() != null) {
-      switch (analysis.getIntoFormat()) {
-        case AVRO:
-          final String schemaFullName =
-              StringUtil.cleanQuotes(
-                  analysis.getIntoProperties().get(
-                      DdlConfig.VALUE_AVRO_SCHEMA_FULL_NAME).toString());
-          return new KsqlAvroTopicSerDe(schemaFullName);
-
-        case JSON:
-          return new KsqlJsonTopicSerDe();
-
-        case DELIMITED:
-          return new KsqlDelimitedTopicSerDe();
-
-        default:
-          throw new KsqlException(
-              String.format("Unsupported format: %s", analysis.getIntoFormat()));
-      }
-    }
-
-    final KsqlTopicSerDe intoTopicSerde = fromDataSources.get(0)
-        .getLeft()
-        .getKsqlTopic()
-        .getKsqlTopicSerDe();
-
-    if (intoTopicSerde instanceof KsqlAvroTopicSerDe) {
-      final String schemaFullName = StringUtil.cleanQuotes(
-              analysis.getIntoProperties().get(DdlConfig.VALUE_AVRO_SCHEMA_FULL_NAME).toString());
-      return new KsqlAvroTopicSerDe(schemaFullName);
-    }
-    return intoTopicSerde;
-  }
-
-  private void setIntoTopicName(final Sink sink) {
-    String intoKafkaTopicName =
-        sink.getProperties().get(DdlConfig.KAFKA_TOPIC_NAME_PROPERTY).toString();
-    if (!intoKafkaTopicName.startsWith("'") && !intoKafkaTopicName.endsWith("'")) {
-      throw new KsqlException(
-          intoKafkaTopicName + " value is string and should be enclosed between " + "\"'\".");
-    }
-    intoKafkaTopicName = intoKafkaTopicName.substring(1, intoKafkaTopicName.length() - 1);
-    analysis.setIntoKafkaTopicName(intoKafkaTopicName);
-    analysis.getIntoProperties().put(DdlConfig.KAFKA_TOPIC_NAME_PROPERTY, intoKafkaTopicName);
-  }
-
-  private void setIntoTopicFormat(final Sink sink) {
-    final Object serdeProperty = sink.getProperties().get(DdlConfig.VALUE_FORMAT_PROPERTY);
-
-    final Format format;
-    if (serdeProperty != null) {
-      format = Format.of(StringUtil.cleanQuotes(serdeProperty.toString()));
-    } else {
-      final DataSource<?> leftSource = analysis.getFromDataSource(0).left;
-      format = leftSource.getKsqlTopic().getKsqlTopicSerDe().getSerDe();
-    }
-
-    analysis.setIntoFormat(format);
-    analysis.getIntoProperties().put(DdlConfig.VALUE_FORMAT_PROPERTY, format);
-
-    final Expression avroSchemaFullName =
-        sink.getProperties().get(DdlConfig.VALUE_AVRO_SCHEMA_FULL_NAME);
-
-    if (format == Format.AVRO) {
-      analysis.getIntoProperties().put(
-          DdlConfig.VALUE_AVRO_SCHEMA_FULL_NAME,
-          avroSchemaFullName != null
-              ? avroSchemaFullName : KsqlConstants.DEFAULT_AVRO_SCHEMA_FULL_NAME);
-    } else if (avroSchemaFullName != null) {
-      throw new KsqlException(
-          DdlConfig.VALUE_AVRO_SCHEMA_FULL_NAME + " is only valid for AVRO topics.");
-    }
-  }
-
-  private void setIntoTimestampColumnAndFormat(final Sink sink) {
-    final Map<String, Expression> properties = sink.getProperties();
-    String intoTimestampColumnName = properties
-        .get(KsqlConstants.SINK_TIMESTAMP_COLUMN_NAME).toString().toUpperCase();
-    if (!intoTimestampColumnName.startsWith("'") && !intoTimestampColumnName.endsWith("'")) {
-      throw new KsqlException(
-          intoTimestampColumnName + " value is string and should be enclosed between "
-              + "\"'\".");
-    }
-    intoTimestampColumnName = intoTimestampColumnName.substring(
-        1,
-        intoTimestampColumnName.length() - 1
-    );
-    analysis.getIntoProperties().put(
-        KsqlConstants.SINK_TIMESTAMP_COLUMN_NAME,
-        intoTimestampColumnName
-    );
-
-    if (properties.containsKey(DdlConfig.TIMESTAMP_FORMAT_PROPERTY)) {
-      final String timestampFormat = StringUtil.cleanQuotes(
-          properties.get(DdlConfig.TIMESTAMP_FORMAT_PROPERTY).toString());
-      analysis.getIntoProperties().put(DdlConfig.TIMESTAMP_FORMAT_PROPERTY, timestampFormat);
-    }
-  }
-
-  private static void validateWithClause(final Set<String> withClauseVariables) {
-
-    final Set<String> validSet = new HashSet<>();
-    validSet.add(DdlConfig.VALUE_FORMAT_PROPERTY.toUpperCase());
-    validSet.add(DdlConfig.KAFKA_TOPIC_NAME_PROPERTY.toUpperCase());
-    validSet.add(DdlConfig.PARTITION_BY_PROPERTY.toUpperCase());
-    validSet.add(KsqlConstants.SINK_TIMESTAMP_COLUMN_NAME.toUpperCase());
-    validSet.add(KsqlConstants.SINK_NUMBER_OF_PARTITIONS.toUpperCase());
-    validSet.add(KsqlConstants.SINK_NUMBER_OF_REPLICAS.toUpperCase());
-    validSet.add(DdlConfig.TIMESTAMP_FORMAT_PROPERTY.toUpperCase());
-    validSet.add(DdlConfig.VALUE_AVRO_SCHEMA_FULL_NAME.toUpperCase());
-
-    for (final String withVariable : withClauseVariables) {
-      if (!validSet.contains(withVariable.toUpperCase())) {
-        throw new KsqlException("Invalid config variable in the WITH clause: " + withVariable);
-      }
-    }
+    return visitor.analysis;
   }
 
   // CHECKSTYLE_RULES.OFF: ClassDataAbstractionCoupling
   private final class Visitor extends DefaultTraversalVisitor<Node, Void> {
     // CHECKSTYLE_RULES.ON: ClassDataAbstractionCoupling
+
+    private final Analysis analysis = new Analysis();
+    private Optional<String> intoKafkaTopicName = Optional.empty();
+
+    private void analyzeSink(
+        final Optional<Sink> sink,
+        final String sqlExpression
+    ) {
+      sink.ifPresent(s -> analyzeNonStdOutSink(s, sqlExpression));
+    }
+
+    private void setIntoProperties(final Sink sink) {
+      validateWithClause(sink.getProperties().keySet());
+
+      setIntoTopicName(sink.getProperties());
+
+      setPartitionBy(sink.getProperties());
+
+      setIntoTimestampColumnAndFormat(sink.getProperties());
+
+      setSerdeOptions(sink);
+    }
+
+    private void setPartitionBy(final Map<String, Expression> properties) {
+      if (properties.get(DdlConfig.PARTITION_BY_PROPERTY) == null) {
+        return;
+      }
+
+      final String intoPartitionByColumnName = properties
+          .get(DdlConfig.PARTITION_BY_PROPERTY)
+          .toString()
+          .toUpperCase();
+
+      analysis.setPartitionBy(intoPartitionByColumnName);
+    }
+
+    private void analyzeNonStdOutSink(
+        final Sink sink,
+        final String sqlExpression
+    ) {
+      setIntoProperties(sink);
+
+      if (!sink.shouldCreateSink()) {
+        final DataSource<?> existing = metaStore.getSource(sink.getName());
+        if (existing == null) {
+          throw new KsqlException("Unknown source: " + sink.getName());
+        }
+
+        if (metaStore.getTopic(sink.getName()) == null) {
+          throw new KsqlException(
+              "Sink topic " + sink.getName() + " does not exist in the metastore.");
+        }
+
+        analysis.setInto(Into.of(
+            sqlExpression,
+            sink.getName(),
+            false,
+            existing.getKsqlTopic(),
+            existing.getKeySerdeFactory()
+        ));
+        return;
+      }
+
+      final String topicName = intoKafkaTopicName
+          .orElseGet(() -> topicPrefix + sink.getName());
+
+      final KsqlSerdeFactory valueSerdeFactory = getValueSerdeFactory(sink);
+
+      final KsqlTopic intoKsqlTopic = new KsqlTopic(
+          sink.getName(),
+          topicName,
+          valueSerdeFactory,
+          true
+      );
+
+      analysis.setInto(Into.of(
+          sqlExpression,
+          sink.getName(),
+          true,
+          intoKsqlTopic,
+          Serdes::String
+      ));
+    }
+
+    private KsqlSerdeFactory getValueSerdeFactory(final Sink sink) {
+      final Format format = getValueFormat(sink);
+      return serdeFactories.create(format, sink.getProperties());
+    }
+
+    private Format getValueFormat(final Sink sink) {
+      final Object serdeProperty = sink.getProperties().get(DdlConfig.VALUE_FORMAT_PROPERTY);
+
+      if (serdeProperty != null) {
+        return Format.of(StringUtil.cleanQuotes(serdeProperty.toString()));
+      }
+
+      final DataSource<?> leftSource = analysis.getFromDataSource(0).getDataSource();
+      return leftSource.getKsqlTopic().getValueSerdeFactory().getFormat();
+    }
+
+    private void setIntoTopicName(final Map<String, Expression> properties) {
+      final Expression expression = properties.get(DdlConfig.KAFKA_TOPIC_NAME_PROPERTY);
+      if (expression == null) {
+        intoKafkaTopicName = Optional.empty();
+        return;
+      }
+
+      if (!(expression instanceof StringLiteral)) {
+        throw new KsqlException(
+            DdlConfig.KAFKA_TOPIC_NAME_PROPERTY + " should be a string literal.");
+      }
+
+      final String kafkaTopicName = ((StringLiteral) expression).getValue();
+      intoKafkaTopicName = Optional.of(kafkaTopicName);
+    }
+
+    private void setIntoTimestampColumnAndFormat(final Map<String, Expression> properties) {
+      final Expression columnNameExp = properties.get(KsqlConstants.SINK_TIMESTAMP_COLUMN_NAME);
+      if (columnNameExp != null) {
+        if (!(columnNameExp instanceof Literal)) {
+          throw new KsqlException(KsqlConstants.SINK_TIMESTAMP_COLUMN_NAME
+              + " set in the WITH clause must be set to a literal");
+        }
+
+        analysis.setTimestampColumnName(((Literal) columnNameExp).getValue().toString());
+      }
+
+      final Expression formatExp = properties.get(DdlConfig.TIMESTAMP_FORMAT_PROPERTY);
+      if (formatExp != null) {
+        if (columnNameExp == null) {
+          throw new KsqlException("You must specify a " + KsqlConstants.SINK_TIMESTAMP_COLUMN_NAME
+              + " if you wish to specify " + DdlConfig.TIMESTAMP_FORMAT_PROPERTY);
+        }
+
+        if (!(formatExp instanceof Literal)) {
+          throw new KsqlException(DdlConfig.TIMESTAMP_FORMAT_PROPERTY
+              + " set in the WITH clause must be set to a literal");
+        }
+
+        analysis.setTimestampFormat(((Literal) formatExp).getValue().toString());
+      }
+    }
+
+    private void setSerdeOptions(final Sink sink) {
+      final List<String> columnNames = analysis.getSelectExpressionAlias();
+
+      final Format valueFormat = getValueFormat(sink);
+
+      analysis.setSerdeOptions(serdeOptionsSupplier.build(
+          columnNames,
+          sink.getProperties(),
+          valueFormat,
+          defaultSerdeOptions
+      ));
+    }
+
+    private void validateWithClause(final Set<String> withClauseVariables) {
+      for (final String withVariable : withClauseVariables) {
+        if (!VALID_WITH_PROPS.contains(withVariable.toUpperCase())) {
+          throw new KsqlException("Invalid config variable in the WITH clause: " + withVariable);
+        }
+      }
+    }
 
     @Override
     protected Node visitQuery(
@@ -348,12 +337,12 @@ class Analyzer {
     }
 
     private void analyzeExpressions() {
-      KsqlSchema schema = analysis.getFromDataSources().get(0).getLeft().getSchema();
-      boolean isJoinSchema = false;
-      if (analysis.getJoin() != null) {
-        schema = analysis.getJoin().getSchema();
-        isJoinSchema = true;
-      }
+      final boolean isJoinSchema = analysis.getJoin() != null;
+
+      final LogicalSchema schema = isJoinSchema
+          ? analysis.getJoin().getSchema()
+          : analysis.getFromDataSource(0).getSchema().withoutAlias();
+
       final ExpressionAnalyzer expressionAnalyzer = new ExpressionAnalyzer(schema, isJoinSchema);
 
       for (final Expression selectExpression : analysis.getSelectExpressions()) {
@@ -396,13 +385,13 @@ class Analyzer {
       final ComparisonExpression comparisonExpression = (ComparisonExpression) joinOn
           .getExpression();
 
-      final Field leftJoinField = getJoinField(
+      final String leftJoinField = getJoinFieldName(
           comparisonExpression,
           leftAlias,
           leftDataSource.getSchema()
       );
 
-      final Field rightJoinField = getJoinField(
+      final String rightJoinField = getJoinFieldName(
           comparisonExpression,
           rightAlias,
           rightDataSource.getSchema()
@@ -412,32 +401,31 @@ class Analyzer {
         throw new KsqlException("Only equality join criteria is supported.");
       }
 
-      final DataSourceNode leftSourceKafkaTopicNode = new DataSourceNode(
+      final DataSourceNode leftSourceNode = new DataSourceNode(
           new PlanNodeId("KafkaTopic_Left"),
           leftDataSource,
           leftAlias
       );
 
-      final DataSourceNode rightSourceKafkaTopicNode = new DataSourceNode(
+      final DataSourceNode rightSourceNode = new DataSourceNode(
           new PlanNodeId("KafkaTopic_Right"),
           rightDataSource,
           rightAlias
       );
 
-      final JoinNode joinNode =
-          new JoinNode(
-              new PlanNodeId("Join"),
-              joinType,
-              leftSourceKafkaTopicNode,
-              rightSourceKafkaTopicNode,
-              leftJoinField.name(),
-              rightJoinField.name(),
-              leftAlias,
-              rightAlias,
-              node.getWithinExpression().orElse(null),
-              leftDataSource.getDataSourceType(),
-              rightDataSource.getDataSourceType()
-          );
+      final JoinNode joinNode = new JoinNode(
+          new PlanNodeId("Join"),
+          joinType,
+          leftSourceNode,
+          rightSourceNode,
+          leftJoinField,
+          rightJoinField,
+          leftAlias,
+          rightAlias,
+          node.getWithinExpression().orElse(null),
+          leftDataSource.getDataSourceType(),
+          rightDataSource.getDataSourceType()
+      );
 
       analysis.setJoin(joinNode);
       return null;
@@ -461,12 +449,12 @@ class Analyzer {
       return joinType;
     }
 
-    private Field getJoinField(
+    private String getJoinFieldName(
         final ComparisonExpression comparisonExpression,
         final String sourceAlias,
-        final KsqlSchema sourceSchema
+        final LogicalSchema sourceSchema
     ) {
-      Optional<Field> joinField = getJoinFieldFromExpr(
+      Optional<String> joinField = getJoinFieldFromExpr(
           comparisonExpression.getLeft(),
           sourceAlias,
           sourceSchema
@@ -490,10 +478,10 @@ class Analyzer {
           ));
     }
 
-    private Optional<Field> getJoinFieldFromExpr(
+    private Optional<String> getJoinFieldFromExpr(
         final Expression expression,
         final String sourceAlias,
-        final KsqlSchema sourceSchema
+        final LogicalSchema sourceSchema
     ) {
       if (expression instanceof DereferenceExpression) {
         final DereferenceExpression dereferenceExpr = (DereferenceExpression) expression;
@@ -516,28 +504,31 @@ class Analyzer {
       return Optional.empty();
     }
 
-    private Optional<Field> getJoinFieldFromSource(
+    private Optional<String> getJoinFieldFromSource(
         final String fieldName,
         final String sourceAlias,
-        final KsqlSchema sourceSchema
+        final LogicalSchema sourceSchema
     ) {
-      return sourceSchema.findField(fieldName)
-          .map(field -> SchemaUtil.buildAliasedField(sourceAlias, field));
+      return sourceSchema.findValueField(fieldName)
+          .map(field -> SchemaUtil.buildAliasedFieldName(sourceAlias, field.name()));
     }
 
     @Override
     protected Node visitAliasedRelation(final AliasedRelation node, final Void context) {
       final String structuredDataSourceName = ((Table) node.getRelation()).getName().getSuffix();
-      if (metaStore.getSource(structuredDataSourceName) == null) {
+
+      final DataSource<?> source = metaStore.getSource(structuredDataSourceName);
+      if (source == null) {
         throw new KsqlException(structuredDataSourceName + " does not exist.");
       }
 
-      final Pair<DataSource<?>, String> fromDataSource =
-          new Pair<>(
-              metaStore.getSource(structuredDataSourceName),
-              node.getAlias()
-          );
-      analysis.addDataSource(fromDataSource);
+      final DataSourceNode sourceNode = new DataSourceNode(
+          new PlanNodeId("KsqlTopic"),
+          source,
+          node.getAlias()
+      );
+
+      analysis.addDataSource(sourceNode);
       return node;
     }
 
@@ -552,45 +543,32 @@ class Analyzer {
         if (selectItem instanceof AllColumns) {
           // expand * and T.*
           final AllColumns allColumns = (AllColumns) selectItem;
-          if ((analysis.getFromDataSources() == null) || (
-              analysis.getFromDataSources().isEmpty())) {
-            throw new KsqlException("FROM clause was not resolved!");
-          }
-          if (analysis.getJoin() != null) {
-            final JoinNode joinNode = analysis.getJoin();
-            for (final Field field : joinNode.getLeft().getSchema().fields()) {
-              final QualifiedNameReference qualifiedNameReference =
-                  new QualifiedNameReference(allColumns.getLocation(), QualifiedName
-                      .of(joinNode.getLeftAlias() + "." + field.name()));
-              analysis.addSelectItem(
-                  qualifiedNameReference,
-                  joinNode.getLeftAlias() + "_" + field.name()
-              );
+          final Optional<NodeLocation> location = allColumns.getLocation();
+
+          final JoinNode join = analysis.getJoin();
+          if (join != null) {
+            final String prefix = allColumns.getPrefix()
+                .map(QualifiedName::toString)
+                .orElse("");
+
+            if (!prefix.equals(join.getRightAlias())) {
+              final LogicalSchema schema = join.getLeft().getSchema();
+              addSelectItems(location, schema, join.getLeftAlias(), join.getLeftAlias() + "_");
             }
-            for (final Field field : joinNode.getRight().getSchema().fields()) {
-              final QualifiedNameReference qualifiedNameReference =
-                  new QualifiedNameReference(
-                      allColumns.getLocation(),
-                      QualifiedName.of(joinNode.getRightAlias() + "." + field.name())
-                  );
-              analysis.addSelectItem(
-                  qualifiedNameReference,
-                  joinNode.getRightAlias() + "_" + field.name()
-              );
+
+            if (!prefix.equals(join.getLeftAlias())) {
+              final LogicalSchema schema = join.getRight().getSchema();
+              addSelectItems(location, schema, join.getRightAlias(), join.getRightAlias() + "_");
             }
           } else {
-            for (final Field field : analysis.getFromDataSources().get(0).getLeft().getSchema()
-                .fields()) {
-              final QualifiedNameReference qualifiedNameReference =
-                  new QualifiedNameReference(allColumns.getLocation(), QualifiedName
-                      .of(analysis.getFromDataSources().get(0).getRight() + "." + field
-                          .name()));
-              analysis.addSelectItem(qualifiedNameReference, field.name());
-            }
+            final DataSourceNode source = analysis.getFromDataSource(0);
+            final LogicalSchema schema = source.getSchema();
+
+            addSelectItems(location, schema, source.getAlias(), "");
           }
         } else if (selectItem instanceof SingleColumn) {
           final SingleColumn column = (SingleColumn) selectItem;
-          analysis.addSelectItem(column.getExpression(), column.getAlias().get());
+          analysis.addSelectItem(column.getExpression(), column.getAlias());
         } else {
           throw new IllegalArgumentException(
               "Unsupported SelectItem type: " + selectItem.getClass().getName());
@@ -630,5 +608,37 @@ class Analyzer {
     private void analyzeHaving(final Node node) {
       analysis.setHavingExpression((Expression) node);
     }
+
+    private void addSelectItems(
+        final Optional<NodeLocation> location,
+        final LogicalSchema schema,
+        final String sourceAlias,
+        final String aliasPrefix
+    ) {
+      for (final Field field : schema.withoutAlias().valueFields()) {
+
+        final QualifiedName name = QualifiedName.of(sourceAlias);
+
+        final QualifiedNameReference nameRef = new QualifiedNameReference(location, name);
+
+        final DereferenceExpression selectItem =
+            new DereferenceExpression(location, nameRef, field.name());
+
+        final String alias = aliasPrefix + field.name();
+
+        analysis.addSelectItem(selectItem, alias);
+      }
+    }
+  }
+
+  @FunctionalInterface
+  interface SerdeOptionsSupplier {
+
+    Set<SerdeOption> build(
+        List<String> columnNames,
+        Map<String, Expression> properties,
+        Format valueFormat,
+        Set<SerdeOption> singleFieldDefaults
+    );
   }
 }

@@ -21,46 +21,57 @@ import static org.hamcrest.CoreMatchers.nullValue;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.notNullValue;
 
+import com.google.common.collect.ImmutableMap;
+import io.confluent.ksql.schema.Operator;
+import io.confluent.ksql.schema.ksql.PersistenceSchema;
 import java.lang.reflect.Type;
+import java.math.BigDecimal;
 import java.util.List;
 import java.util.Map;
+import org.apache.kafka.connect.data.ConnectSchema;
 import org.apache.kafka.connect.data.Field;
 import org.apache.kafka.connect.data.Schema;
 import org.apache.kafka.connect.data.SchemaBuilder;
 import org.junit.Assert;
-import org.junit.Before;
 import org.junit.Test;
 
 public class SchemaUtilTest {
 
-  private Schema schema;
+  private static final ConnectSchema STRUCT_SCHEMA = (ConnectSchema) SchemaBuilder.struct()
+      .field("f0", Schema.OPTIONAL_INT64_SCHEMA)
+      .field("f1", Schema.OPTIONAL_BOOLEAN_SCHEMA)
+      .build();
 
-  @Before
-  public void init() {
-    final Schema structSchema = SchemaBuilder.struct()
-        .field("f0", Schema.OPTIONAL_INT64_SCHEMA)
-        .field("f1", Schema.OPTIONAL_BOOLEAN_SCHEMA)
-        .build();
-
-    schema = SchemaBuilder.struct()
-        .field("ORDERTIME", Schema.OPTIONAL_INT64_SCHEMA)
-        .field("ORDERID", Schema.OPTIONAL_INT64_SCHEMA)
-        .field("ITEMID", Schema.OPTIONAL_STRING_SCHEMA)
-        .field("ORDERUNITS", Schema.OPTIONAL_FLOAT64_SCHEMA)
-        .field("ARRAYCOL", SchemaBuilder.array(Schema.OPTIONAL_FLOAT64_SCHEMA).optional().build())
-        .field("MAPCOL",
-            SchemaBuilder.map(Schema.OPTIONAL_STRING_SCHEMA, Schema.OPTIONAL_FLOAT64_SCHEMA)
-                .optional().build())
-        .field("RAW_STRUCT", structSchema)
-        .field("ARRAY_OF_STRUCTS", SchemaBuilder.array(structSchema).optional().build())
-        .field("MAP-OF-STRUCTS",
-            SchemaBuilder.map(Schema.OPTIONAL_STRING_SCHEMA, structSchema).optional().build())
-        .field("NESTED.STRUCTS", SchemaBuilder.struct()
-            .field("s0", structSchema)
-            .field("s1", SchemaBuilder.struct().field("ss0", structSchema))
-            .build())
-        .build();
-  }
+  private static final ConnectSchema SCHEMA = (ConnectSchema) SchemaBuilder.struct()
+      .field("ORDERTIME", Schema.OPTIONAL_INT64_SCHEMA)
+      .field("ORDERID", Schema.OPTIONAL_INT64_SCHEMA)
+      .field("ITEMID", Schema.OPTIONAL_STRING_SCHEMA)
+      .field("ORDERUNITS", Schema.OPTIONAL_FLOAT64_SCHEMA)
+      .field("ARRAYCOL", SchemaBuilder
+          .array(Schema.OPTIONAL_FLOAT64_SCHEMA)
+          .optional()
+          .build())
+      .field("MAPCOL", SchemaBuilder
+          .map(Schema.OPTIONAL_STRING_SCHEMA, Schema.OPTIONAL_FLOAT64_SCHEMA)
+          .optional()
+          .build())
+      .field("RAW_STRUCT", STRUCT_SCHEMA)
+      .field("ARRAY_OF_STRUCTS", SchemaBuilder
+          .array(STRUCT_SCHEMA)
+          .optional()
+          .build())
+      .field("MAP-OF-STRUCTS", SchemaBuilder
+          .map(Schema.OPTIONAL_STRING_SCHEMA, STRUCT_SCHEMA)
+          .optional()
+          .build())
+      .field("NESTED.STRUCTS", SchemaBuilder
+          .struct()
+          .field("s0", STRUCT_SCHEMA)
+          .field("s1", SchemaBuilder
+              .struct()
+              .field("ss0", STRUCT_SCHEMA))
+          .build())
+      .build();
 
   @Test
   public void shouldGetCorrectJavaClassForBoolean() {
@@ -108,60 +119,15 @@ public class SchemaUtilTest {
   }
 
   @Test
-  public void shouldGetCorrectSqlTypeNameForBoolean() {
-    assertThat(SchemaUtil.getSqlTypeName(Schema.OPTIONAL_BOOLEAN_SCHEMA), equalTo("BOOLEAN"));
+  public void shouldGetCorrectJavaClassForBytes() {
+    final Class<?> decClazz = SchemaUtil.getJavaType(DecimalUtil.builder(2, 1).build());
+    assertThat(decClazz, equalTo(BigDecimal.class));
   }
-
-  @Test
-  public void shouldGetCorrectSqlTypeNameForInt() {
-    assertThat(SchemaUtil.getSqlTypeName(Schema.OPTIONAL_INT32_SCHEMA), equalTo("INT"));
-  }
-
-  @Test
-  public void shouldGetCorrectSqlTypeNameForBigint() {
-    assertThat(SchemaUtil.getSqlTypeName(Schema.OPTIONAL_INT64_SCHEMA), equalTo("BIGINT"));
-  }
-
-  @Test
-  public void shouldGetCorrectSqlTypeNameForDouble() {
-    assertThat(SchemaUtil.getSqlTypeName(Schema.OPTIONAL_FLOAT64_SCHEMA), equalTo("DOUBLE"));
-  }
-
-  @Test
-  public void shouldGetCorrectSqlTypeNameForArray() {
-    assertThat(SchemaUtil
-            .getSqlTypeName(SchemaBuilder.array(Schema.OPTIONAL_FLOAT64_SCHEMA).optional().build()),
-        equalTo("ARRAY<DOUBLE>"));
-  }
-
-  @Test
-  public void shouldGetCorrectSqlTypeNameForMap() {
-    assertThat(SchemaUtil.getSqlTypeName(
-        SchemaBuilder.map(Schema.OPTIONAL_STRING_SCHEMA, Schema.OPTIONAL_FLOAT64_SCHEMA).optional()
-            .build()),
-        equalTo("MAP<VARCHAR,DOUBLE>"));
-  }
-
-  @Test
-  public void shouldGetCorrectSqlTypeNameForStruct() {
-    final Schema structSchema = SchemaBuilder.struct()
-        .field("COL1", Schema.OPTIONAL_STRING_SCHEMA)
-        .field("COL2", Schema.OPTIONAL_INT32_SCHEMA)
-        .field("COL3", Schema.OPTIONAL_FLOAT64_SCHEMA)
-        .field("COL4", SchemaBuilder.array(Schema.OPTIONAL_FLOAT64_SCHEMA).optional().build())
-        .field("COL5",
-            SchemaBuilder.map(Schema.OPTIONAL_STRING_SCHEMA, Schema.OPTIONAL_FLOAT64_SCHEMA)
-                .optional().build())
-        .build();
-    assertThat(SchemaUtil.getSqlTypeName(structSchema),
-        equalTo(
-            "STRUCT<COL1 VARCHAR, COL2 INT, COL3 DOUBLE, COL4 ARRAY<DOUBLE>, COL5 MAP<VARCHAR,DOUBLE>>"));
-  }
-
 
   @Test
   public void shouldCreateCorrectAvroSchemaWithNullableFields() {
-    final Schema schema = SchemaBuilder.struct()
+    // Given:
+    final ConnectSchema schema = (ConnectSchema) SchemaBuilder.struct()
         .field("ordertime", Schema.OPTIONAL_INT64_SCHEMA)
         .field("orderid", Schema.OPTIONAL_STRING_SCHEMA)
         .field("itemid", Schema.OPTIONAL_STRING_SCHEMA)
@@ -169,10 +135,15 @@ public class SchemaUtilTest {
         .field("arraycol", SchemaBuilder.array(Schema.OPTIONAL_FLOAT64_SCHEMA).optional().build())
         .field("mapcol",
             SchemaBuilder.map(Schema.OPTIONAL_STRING_SCHEMA, Schema.OPTIONAL_FLOAT64_SCHEMA))
-        .optional().build();
-    final String avroSchemaString = SchemaUtil.buildAvroSchema(schema, "orders")
-        .toString();
-    assertThat(avroSchemaString, equalTo(
+        .optional()
+        .build();
+
+    // When:
+    final org.apache.avro.Schema avroSchema = SchemaUtil
+        .buildAvroSchema(PersistenceSchema.of(schema), "orders");
+
+    // Then:
+    assertThat(avroSchema.toString(), equalTo(
         "{\"type\":\"record\",\"name\":\"orders\",\"namespace\":\"ksql\",\"fields\":"
             + "[{\"name\":\"ordertime\",\"type\":[\"null\",\"long\"],\"default\":null},{\"name\":"
             + "\"orderid\",\"type\":[\"null\",\"string\"],\"default\":null},{\"name\":\"itemid\","
@@ -186,7 +157,8 @@ public class SchemaUtilTest {
   @Test
   public void shouldSupportAvroStructs() {
     // When:
-    final org.apache.avro.Schema avroSchema = SchemaUtil.buildAvroSchema(schema, "bob");
+    final org.apache.avro.Schema avroSchema = SchemaUtil
+        .buildAvroSchema(PersistenceSchema.of(SCHEMA), "bob");
 
     // Then:
     final org.apache.avro.Schema.Field rawStruct = avroSchema.getField("RAW_STRUCT");
@@ -209,7 +181,8 @@ public class SchemaUtilTest {
   @Test
   public void shouldSupportAvroArrayOfStructs() {
     // When:
-    final org.apache.avro.Schema avroSchema = SchemaUtil.buildAvroSchema(schema, "bob");
+    final org.apache.avro.Schema avroSchema = SchemaUtil
+        .buildAvroSchema(PersistenceSchema.of(SCHEMA), "bob");
 
     // Then:
     final org.apache.avro.Schema.Field rawStruct = avroSchema.getField("ARRAY_OF_STRUCTS");
@@ -235,7 +208,8 @@ public class SchemaUtilTest {
   @Test
   public void shouldSupportAvroMapOfStructs() {
     // When:
-    final org.apache.avro.Schema avroSchema = SchemaUtil.buildAvroSchema(schema, "bob");
+    final org.apache.avro.Schema avroSchema = SchemaUtil
+        .buildAvroSchema(PersistenceSchema.of(SCHEMA), "bob");
 
     // Then:
     final org.apache.avro.Schema.Field rawStruct = avroSchema.getField("MAP_OF_STRUCTS");
@@ -261,7 +235,8 @@ public class SchemaUtilTest {
   @Test
   public void shouldSupportAvroNestedStructs() {
     // When:
-    final org.apache.avro.Schema avroSchema = SchemaUtil.buildAvroSchema(schema, "bob");
+    final org.apache.avro.Schema avroSchema = SchemaUtil
+        .buildAvroSchema(PersistenceSchema.of(SCHEMA), "bob");
 
     // Then:
     final org.apache.avro.Schema.Field rawStruct = avroSchema.getField("NESTED_STRUCTS");
@@ -306,6 +281,107 @@ public class SchemaUtilTest {
             + "{\"name\":\"s1\",\"type\":[\"null\"," + s1Schema + "],\"default\":null}"
             + "]}"
     ));
+  }
+
+  @Test
+  public void shouldCreateAvroSchemaForBoolean() {
+    // Given:
+    final PersistenceSchema schema = PersistenceSchema
+        .of((ConnectSchema) Schema.OPTIONAL_BOOLEAN_SCHEMA);
+
+    // When:
+    final org.apache.avro.Schema avroSchema = SchemaUtil.buildAvroSchema(schema, "orders");
+
+    // Then:
+    assertThat(avroSchema.toString(), equalTo("\"boolean\""));
+  }
+
+  @Test
+  public void shouldCreateAvroSchemaForInt() {
+    // Given:
+    final PersistenceSchema schema = PersistenceSchema
+        .of((ConnectSchema) Schema.OPTIONAL_INT32_SCHEMA);
+
+    // When:
+    final org.apache.avro.Schema avroSchema = SchemaUtil.buildAvroSchema(schema, "orders");
+
+    // Then:
+    assertThat(avroSchema.toString(), equalTo("\"int\""));
+  }
+
+  @Test
+  public void shouldCreateAvroSchemaForBigInt() {
+    // Given:
+    final PersistenceSchema schema = PersistenceSchema
+        .of((ConnectSchema) Schema.OPTIONAL_INT64_SCHEMA);
+
+    // When:
+    final org.apache.avro.Schema avroSchema = SchemaUtil.buildAvroSchema(schema, "orders");
+
+    // Then:
+    assertThat(avroSchema.toString(), equalTo("\"long\""));
+  }
+
+  @Test
+  public void shouldCreateAvroSchemaForDouble() {
+    // Given:
+    final PersistenceSchema schema = PersistenceSchema
+        .of((ConnectSchema) Schema.OPTIONAL_FLOAT64_SCHEMA);
+
+    // When:
+    final org.apache.avro.Schema avroSchema = SchemaUtil.buildAvroSchema(schema, "orders");
+
+    // Then:
+    assertThat(avroSchema.toString(), equalTo("\"double\""));
+  }
+
+  @Test
+  public void shouldCreateAvroSchemaForString() {
+    // Given:
+    final PersistenceSchema schema = PersistenceSchema
+        .of((ConnectSchema) Schema.OPTIONAL_STRING_SCHEMA);
+
+    // When:
+    final org.apache.avro.Schema avroSchema = SchemaUtil.buildAvroSchema(schema, "orders");
+
+    // Then:
+    assertThat(avroSchema.toString(), equalTo("\"string\""));
+  }
+
+  @Test
+  public void shouldCreateAvroSchemaForArray() {
+    // Given:
+    final PersistenceSchema schema = PersistenceSchema
+        .of((ConnectSchema) SchemaBuilder
+            .array(Schema.OPTIONAL_INT64_SCHEMA)
+            .build());
+
+    // When:
+    final org.apache.avro.Schema avroSchema = SchemaUtil.buildAvroSchema(schema, "orders");
+
+    // Then:
+    assertThat(avroSchema.toString(), equalTo("{"
+        + "\"type\":\"array\","
+        + "\"items\":[\"null\",\"long\"]"
+        + "}"));
+  }
+
+  @Test
+  public void shouldCreateAvroSchemaForMap() {
+    // Given:
+    final PersistenceSchema schema = PersistenceSchema
+        .of((ConnectSchema) SchemaBuilder
+            .map(Schema.OPTIONAL_STRING_SCHEMA, Schema.BOOLEAN_SCHEMA)
+            .build());
+
+    // When:
+    final org.apache.avro.Schema avroSchema = SchemaUtil.buildAvroSchema(schema, "orders");
+
+    // Then:
+    assertThat(avroSchema.toString(), equalTo("{"
+        + "\"type\":\"map\","
+        + "\"values\":[\"null\",\"boolean\"]"
+        + "}"));
   }
 
   @Test
@@ -360,7 +436,6 @@ public class SchemaUtilTest {
 
   @Test
   public void shouldFailForCorrectJavaType() {
-
     try {
       SchemaUtil.getJavaType(Schema.BYTES_SCHEMA);
       Assert.fail();
@@ -424,44 +499,6 @@ public class SchemaUtilTest {
         equalTo("(String)"));
   }
 
-
-
-  @Test
-  public void shouldGetCorrectSqlType() {
-    final String sqlType1 = SchemaUtil.getSqlTypeName(Schema.OPTIONAL_BOOLEAN_SCHEMA);
-    final String sqlType2 = SchemaUtil.getSqlTypeName(Schema.OPTIONAL_INT32_SCHEMA);
-    final String sqlType3 = SchemaUtil.getSqlTypeName(Schema.OPTIONAL_INT64_SCHEMA);
-    final String sqlType4 = SchemaUtil.getSqlTypeName(Schema.OPTIONAL_FLOAT64_SCHEMA);
-    final String sqlType5 = SchemaUtil.getSqlTypeName(Schema.OPTIONAL_STRING_SCHEMA);
-    final String sqlType6 = SchemaUtil
-        .getSqlTypeName(SchemaBuilder.array(Schema.OPTIONAL_FLOAT64_SCHEMA).optional().build());
-    final String sqlType7 = SchemaUtil.getSqlTypeName(
-        SchemaBuilder.map(Schema.OPTIONAL_STRING_SCHEMA, Schema.OPTIONAL_FLOAT64_SCHEMA).optional()
-            .build());
-
-    assertThat("Invalid SQL type.", sqlType1, equalTo("BOOLEAN"));
-    assertThat("Invalid SQL type.", sqlType2, equalTo("INT"));
-    assertThat("Invalid SQL type.", sqlType3, equalTo("BIGINT"));
-    assertThat("Invalid SQL type.", sqlType4, equalTo("DOUBLE"));
-    assertThat("Invalid SQL type.", sqlType5, equalTo("VARCHAR"));
-    assertThat("Invalid SQL type.", sqlType6, equalTo("ARRAY<DOUBLE>"));
-    assertThat("Invalid SQL type.", sqlType7, equalTo("MAP<VARCHAR,DOUBLE>"));
-  }
-
-  @Test
-  public void shouldGetCorrectSqlTypeFromSchemaType() {
-    assertThat(SchemaUtil.getSchemaTypeAsSqlType(Schema.Type.STRING), is("VARCHAR(STRING)"));
-    assertThat(SchemaUtil.getSchemaTypeAsSqlType(Schema.Type.INT64), is("BIGINT"));
-    assertThat(SchemaUtil.getSchemaTypeAsSqlType(Schema.Type.INT32), is("INTEGER"));
-    assertThat(SchemaUtil.getSchemaTypeAsSqlType(Schema.Type.FLOAT64), is("DOUBLE"));
-    assertThat(SchemaUtil.getSchemaTypeAsSqlType(Schema.Type.BOOLEAN), is("BOOLEAN"));
-  }
-
-  @Test(expected = IllegalArgumentException.class)
-  public void shouldThrowOnUnknownSchemaType() {
-    SchemaUtil.getSchemaTypeAsSqlType(Schema.Type.BYTES);
-  }
-
   @Test
   public void shouldStripAliasFromField() {
     // Given:
@@ -507,45 +544,190 @@ public class SchemaUtilTest {
   @Test
   public void shouldResolveIntAndLongSchemaToLong() {
     assertThat(
-        SchemaUtil.resolveBinaryOperatorResultType(Schema.Type.INT64, Schema.Type.INT32).type(),
+        SchemaUtil.resolveBinaryOperatorResultType(Schema.INT64_SCHEMA, Schema.INT32_SCHEMA, Operator.ADD).type(),
         equalTo(Schema.Type.INT64));
   }
 
   @Test
   public void shouldResolveIntAndIntSchemaToInt() {
     assertThat(
-        SchemaUtil.resolveBinaryOperatorResultType(Schema.Type.INT32, Schema.Type.INT32).type(),
+        SchemaUtil.resolveBinaryOperatorResultType(Schema.INT32_SCHEMA, Schema.INT32_SCHEMA, Operator.ADD).type(),
         equalTo(Schema.Type.INT32));
   }
 
   @Test
   public void shouldResolveFloat64AndAnyNumberTypeToFloat() {
     assertThat(
-        SchemaUtil.resolveBinaryOperatorResultType(Schema.Type.INT32, Schema.Type.FLOAT64).type(),
+        SchemaUtil.resolveBinaryOperatorResultType(Schema.INT32_SCHEMA, Schema.FLOAT64_SCHEMA, Operator.ADD).type(),
         equalTo(Schema.Type.FLOAT64));
     assertThat(
-        SchemaUtil.resolveBinaryOperatorResultType(Schema.Type.FLOAT64, Schema.Type.INT64).type(),
+        SchemaUtil.resolveBinaryOperatorResultType(Schema.FLOAT64_SCHEMA, Schema.OPTIONAL_INT64_SCHEMA, Operator.ADD).type(),
         equalTo(Schema.Type.FLOAT64));
     assertThat(
-        SchemaUtil.resolveBinaryOperatorResultType(Schema.Type.FLOAT32, Schema.Type.FLOAT64).type(),
+        SchemaUtil.resolveBinaryOperatorResultType(Schema.FLOAT32_SCHEMA, Schema.FLOAT64_SCHEMA, Operator.ADD).type(),
         equalTo(Schema.Type.FLOAT64));
+  }
+
+  @Test
+  public void shouldResolveDecimalAddition() {
+    final Map<Pair<PrecisionScale, PrecisionScale>, PrecisionScale> inputToExpected =
+        ImmutableMap.<Pair<PrecisionScale, PrecisionScale>, PrecisionScale>builder()
+            .put(Pair.of(PrecisionScale.of(2, 1), PrecisionScale.of(2, 1)), PrecisionScale.of(3, 1))
+            .put(Pair.of(PrecisionScale.of(2, 1), PrecisionScale.of(2, 2)), PrecisionScale.of(4, 2))
+            .put(Pair.of(PrecisionScale.of(2, 2), PrecisionScale.of(2, 1)), PrecisionScale.of(4, 2))
+            .put(Pair.of(PrecisionScale.of(2, 1), PrecisionScale.of(3, 2)), PrecisionScale.of(4, 2))
+            .put(Pair.of(PrecisionScale.of(3, 2), PrecisionScale.of(2, 1)), PrecisionScale.of(4, 2))
+            .build();
+
+    inputToExpected.forEach((in, out) -> {
+      // Given:
+      final Schema d1 = DecimalUtil.builder(in.left.precision, in.left.scale).build();
+      final Schema d2 = DecimalUtil.builder(in.right.precision, in.right.scale).build();
+
+      // When:
+      final Schema result = SchemaUtil.resolveBinaryOperatorResultType(d1, d2, Operator.ADD);
+
+      // Then:
+      assertThat(String.format("precision: %s", in), DecimalUtil.precision(result), is(out.precision));
+      assertThat(String.format("scale: %s", in), DecimalUtil.scale(result), is(out.scale));
+    });
+  }
+
+  @Test
+  public void shouldResolveDecimalSubtraction() {
+    final Map<Pair<PrecisionScale, PrecisionScale>, PrecisionScale> inputToExpected =
+        ImmutableMap.<Pair<PrecisionScale, PrecisionScale>, PrecisionScale>builder()
+            .put(Pair.of(PrecisionScale.of(2, 1), PrecisionScale.of(2, 1)), PrecisionScale.of(3, 1))
+            .put(Pair.of(PrecisionScale.of(2, 1), PrecisionScale.of(2, 2)), PrecisionScale.of(4, 2))
+            .put(Pair.of(PrecisionScale.of(2, 2), PrecisionScale.of(2, 1)), PrecisionScale.of(4, 2))
+            .put(Pair.of(PrecisionScale.of(2, 1), PrecisionScale.of(3, 2)), PrecisionScale.of(4, 2))
+            .put(Pair.of(PrecisionScale.of(3, 2), PrecisionScale.of(2, 1)), PrecisionScale.of(4, 2))
+            .build();
+
+    inputToExpected.forEach((in, out) -> {
+      // Given:
+      final Schema d1 = DecimalUtil.builder(in.left.precision, in.left.scale).build();
+      final Schema d2 = DecimalUtil.builder(in.right.precision, in.right.scale).build();
+
+      // When:
+      final Schema result = SchemaUtil.resolveBinaryOperatorResultType(d1, d2, Operator.SUBTRACT);
+
+      // Then:
+      assertThat(String.format("precision: %s", in), DecimalUtil.precision(result), is(out.precision));
+      assertThat(String.format("scale: %s", in), DecimalUtil.scale(result), is(out.scale));
+    });
+  }
+
+  @Test
+  public void shouldResolveDecimalMultiply() {
+    final Map<Pair<PrecisionScale, PrecisionScale>, PrecisionScale> inputToExpected =
+        ImmutableMap.<Pair<PrecisionScale, PrecisionScale>, PrecisionScale>builder()
+            .put(Pair.of(PrecisionScale.of(2, 1), PrecisionScale.of(2, 1)), PrecisionScale.of(5, 2))
+            .put(Pair.of(PrecisionScale.of(2, 1), PrecisionScale.of(2, 2)), PrecisionScale.of(5, 3))
+            .put(Pair.of(PrecisionScale.of(2, 2), PrecisionScale.of(2, 1)), PrecisionScale.of(5, 3))
+            .put(Pair.of(PrecisionScale.of(3, 2), PrecisionScale.of(2, 1)), PrecisionScale.of(6, 3))
+            .build();
+
+    inputToExpected.forEach((in, out) -> {
+      // Given:
+      final Schema d1 = DecimalUtil.builder(in.left.precision, in.left.scale).build();
+      final Schema d2 = DecimalUtil.builder(in.right.precision, in.right.scale).build();
+
+      // When:
+      final Schema result = SchemaUtil.resolveBinaryOperatorResultType(d1, d2, Operator.MULTIPLY);
+
+      // Then:
+      assertThat(String.format("precision: %s", in), DecimalUtil.precision(result), is(out.precision));
+      assertThat(String.format("scale: %s", in), DecimalUtil.scale(result), is(out.scale));
+    });
+  }
+
+  @Test
+  public void shouldResolveDecimalDivide() {
+    final Map<Pair<PrecisionScale, PrecisionScale>, PrecisionScale> inputToExpected =
+        ImmutableMap.<Pair<PrecisionScale, PrecisionScale>, PrecisionScale>builder()
+            .put(Pair.of(PrecisionScale.of(2, 1), PrecisionScale.of(2, 1)), PrecisionScale.of(8, 6))
+            .put(Pair.of(PrecisionScale.of(2, 1), PrecisionScale.of(2, 2)), PrecisionScale.of(9, 6))
+            .put(Pair.of(PrecisionScale.of(2, 2), PrecisionScale.of(2, 1)), PrecisionScale.of(7, 6))
+            .put(Pair.of(PrecisionScale.of(3, 3), PrecisionScale.of(3, 3)), PrecisionScale.of(10, 7))
+            .put(Pair.of(PrecisionScale.of(3, 3), PrecisionScale.of(3, 2)), PrecisionScale.of(9, 7))
+            .build();
+
+    inputToExpected.forEach((in, out) -> {
+      // Given:
+      final Schema d1 = DecimalUtil.builder(in.left.precision, in.left.scale).build();
+      final Schema d2 = DecimalUtil.builder(in.right.precision, in.right.scale).build();
+
+      // When:
+      final Schema result = SchemaUtil.resolveBinaryOperatorResultType(d1, d2, Operator.DIVIDE);
+
+      // Then:
+      assertThat(String.format("precision: %s", in), DecimalUtil.precision(result), is(out.precision));
+      assertThat(String.format("scale: %s", in), DecimalUtil.scale(result), is(out.scale));
+    });
+  }
+
+  @Test
+  public void shouldResolveDecimalMod() {
+    final Map<Pair<PrecisionScale, PrecisionScale>, PrecisionScale> inputToExpected =
+        ImmutableMap.<Pair<PrecisionScale, PrecisionScale>, PrecisionScale>builder()
+            .put(Pair.of(PrecisionScale.of(2, 1), PrecisionScale.of(2, 1)), PrecisionScale.of(2, 1))
+            .put(Pair.of(PrecisionScale.of(2, 2), PrecisionScale.of(2, 1)), PrecisionScale.of(2, 2))
+            .put(Pair.of(PrecisionScale.of(2, 1), PrecisionScale.of(2, 2)), PrecisionScale.of(2, 2))
+            .put(Pair.of(PrecisionScale.of(3, 1), PrecisionScale.of(2, 2)), PrecisionScale.of(2, 2))
+            .build();
+
+    inputToExpected.forEach((in, out) -> {
+      // Given:
+      final Schema d1 = DecimalUtil.builder(in.left.precision, in.left.scale).build();
+      final Schema d2 = DecimalUtil.builder(in.right.precision, in.right.scale).build();
+
+      // When:
+      final Schema result = SchemaUtil.resolveBinaryOperatorResultType(d1, d2, Operator.MODULUS);
+
+      // Then:
+      assertThat(String.format("precision: %s", in), DecimalUtil.precision(result), is(out.precision));
+      assertThat(String.format("scale: %s", in), DecimalUtil.scale(result), is(out.scale));
+    });
+  }
+
+  private static class PrecisionScale {
+    final int precision;
+    final int scale;
+
+    static PrecisionScale of(final int precision, final int scale) {
+      return new PrecisionScale(precision, scale);
+    }
+
+    private PrecisionScale(final int precision, final int scale) {
+      this.precision = precision;
+      this.scale = scale;
+    }
+
+    @Override
+    public String toString() {
+      return "PrecisionScale{"
+          + "precision=" + precision
+          + ", scale=" + scale
+          + '}';
+    }
   }
 
   @Test
   public void shouldResolveStringAndStringToString() {
     assertThat(
-        SchemaUtil.resolveBinaryOperatorResultType(Schema.Type.STRING, Schema.Type.STRING).type(),
+        SchemaUtil.resolveBinaryOperatorResultType(Schema.STRING_SCHEMA, Schema.STRING_SCHEMA, Operator.ADD).type(),
         equalTo(Schema.Type.STRING));
   }
 
   @Test(expected = KsqlException.class)
   public void shouldThrowExceptionWhenResolvingStringWithAnythingElse() {
-    SchemaUtil.resolveBinaryOperatorResultType(Schema.Type.STRING, Schema.Type.FLOAT64);
+    SchemaUtil.resolveBinaryOperatorResultType(Schema.STRING_SCHEMA, Schema.FLOAT64_SCHEMA, Operator.ADD);
   }
 
   @Test(expected = KsqlException.class)
   public void shouldThrowExceptionWhenResolvingUnkonwnType() {
-    SchemaUtil.resolveBinaryOperatorResultType(Schema.Type.BOOLEAN, Schema.Type.FLOAT64);
+    SchemaUtil.resolveBinaryOperatorResultType(Schema.BOOLEAN_SCHEMA, Schema.FLOAT64_SCHEMA, Operator.ADD);
   }
 
   @Test
@@ -649,26 +831,41 @@ public class SchemaUtilTest {
   @Test
   public void shouldPassIsNumberForInt() {
     assertThat(SchemaUtil.isNumber(Schema.Type.INT32), is(true));
+    assertThat(SchemaUtil.isNumber(Schema.OPTIONAL_INT32_SCHEMA), is(true));
+    assertThat(SchemaUtil.isNumber(Schema.INT32_SCHEMA), is(true));
   }
 
   @Test
   public void shouldPassIsNumberForBigint() {
     assertThat(SchemaUtil.isNumber(Schema.Type.INT64), is(true));
+    assertThat(SchemaUtil.isNumber(Schema.OPTIONAL_INT64_SCHEMA), is(true));
+    assertThat(SchemaUtil.isNumber(Schema.INT64_SCHEMA), is(true));
   }
 
   @Test
   public void shouldPassIsNumberForDouble() {
     assertThat(SchemaUtil.isNumber(Schema.Type.FLOAT64), is(true));
+    assertThat(SchemaUtil.isNumber(Schema.OPTIONAL_FLOAT64_SCHEMA), is(true));
+    assertThat(SchemaUtil.isNumber(Schema.FLOAT64_SCHEMA), is(true));
+  }
+
+  @Test
+  public void shouldPassIsNumberForDecimal() {
+    assertThat(SchemaUtil.isNumber(DecimalUtil.builder(2, 1)), is(true));
   }
 
   @Test
   public void shouldFailIsNumberForBoolean() {
     assertThat(SchemaUtil.isNumber(Schema.Type.BOOLEAN), is(false));
+    assertThat(SchemaUtil.isNumber(Schema.OPTIONAL_BOOLEAN_SCHEMA), is(false));
+    assertThat(SchemaUtil.isNumber(Schema.BOOLEAN_SCHEMA), is(false));
   }
 
   @Test
   public void shouldFailIsNumberForString() {
     assertThat(SchemaUtil.isNumber(Schema.Type.STRING), is(false));
+    assertThat(SchemaUtil.isNumber(Schema.OPTIONAL_STRING_SCHEMA), is(false));
+    assertThat(SchemaUtil.isNumber(Schema.STRING_SCHEMA), is(false));
   }
 
   @Test
@@ -712,6 +909,47 @@ public class SchemaUtilTest {
 
     // Then:
     assertThat(result, is(field));
+  }
+
+  @Test
+  public void shouldEnsureDeepOptional() {
+    // Given:
+    final Schema optionalSchema = SchemaBuilder
+        .struct()
+        .field("struct", SchemaBuilder
+            .struct()
+            .field("prim", Schema.FLOAT64_SCHEMA)
+            .field("array", SchemaBuilder
+                .array(Schema.STRING_SCHEMA)
+                .build())
+            .field("map", SchemaBuilder
+                .map(Schema.INT64_SCHEMA, Schema.BOOLEAN_SCHEMA)
+                .build())
+            .build())
+        .build();
+
+    // When:
+    final Schema result = SchemaUtil.ensureOptional(optionalSchema);
+
+    // Then:
+    assertThat(result, is(SchemaBuilder
+        .struct()
+        .field("struct", SchemaBuilder
+            .struct()
+            .field("prim", Schema.OPTIONAL_FLOAT64_SCHEMA)
+            .field("array", SchemaBuilder
+                .array(Schema.OPTIONAL_STRING_SCHEMA)
+                .optional()
+                .build())
+            .field("map", SchemaBuilder
+                .map(Schema.OPTIONAL_INT64_SCHEMA, Schema.OPTIONAL_BOOLEAN_SCHEMA)
+                .optional()
+                .build())
+            .optional()
+            .build())
+        .optional()
+        .build()
+    ));
   }
 
   // Following methods not invoked but used to test conversion from Type -> Schema

@@ -28,18 +28,17 @@ import io.confluent.ksql.parser.tree.LikePredicate;
 import io.confluent.ksql.parser.tree.LogicalBinaryExpression;
 import io.confluent.ksql.parser.tree.NotExpression;
 import io.confluent.ksql.parser.tree.QualifiedNameReference;
-import io.confluent.ksql.schema.ksql.KsqlSchema;
+import io.confluent.ksql.schema.ksql.LogicalSchema;
 import java.util.Objects;
 import java.util.Optional;
-import org.apache.kafka.connect.data.Field;
 
 
 class ExpressionAnalyzer {
 
-  private final KsqlSchema schema;
+  private final LogicalSchema schema;
   private final boolean isJoinSchema;
 
-  ExpressionAnalyzer(final KsqlSchema schema, final boolean isJoinSchema) {
+  ExpressionAnalyzer(final LogicalSchema schema, final boolean isJoinSchema) {
     this.schema = Objects.requireNonNull(schema, "schema");
     this.isJoinSchema = isJoinSchema;
   }
@@ -52,9 +51,9 @@ class ExpressionAnalyzer {
   private class Visitor
       extends AstVisitor<Object, Object> {
 
-    private final KsqlSchema schema;
+    private final LogicalSchema schema;
 
-    Visitor(final KsqlSchema schema) {
+    Visitor(final LogicalSchema schema) {
       this.schema = Objects.requireNonNull(schema, "schema");
     }
 
@@ -116,7 +115,7 @@ class ExpressionAnalyzer {
       if (isJoinSchema) {
         columnName = node.toString();
       }
-      final Optional<Field> schemaField = schema.findField(columnName);
+      final Optional<?> schemaField = schema.findValueField(columnName);
       if (!schemaField.isPresent()) {
         throw new RuntimeException(
             String.format("Column %s cannot be resolved.", columnName));
@@ -136,7 +135,7 @@ class ExpressionAnalyzer {
         final QualifiedNameReference node,
         final Object context) {
       final String columnName = node.getName().getSuffix();
-      final Optional<Field> schemaField = schema.findField(columnName);
+      final Optional<?> schemaField = schema.findValueField(columnName);
       if (!schemaField.isPresent()) {
         throw new RuntimeException(
             String.format("Column %s cannot be resolved.", columnName));

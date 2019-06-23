@@ -3,7 +3,8 @@
 KSQL Configuration Parameter Reference
 ======================================
 
-Here are some common configuration properties that you can customize.
+Here are some common configuration properties that you can customize. Refer to
+:ref:`ksql-server-config` and :ref:`install_cli-config` for details of how to set properties.
 
 .. tip::
 
@@ -217,9 +218,9 @@ The corresponding environment variable in the
 
 .. _ksql-sink-partitions:
 
---------------------
+---------------------------------
 ksql.sink.partitions (Deprecated)
---------------------
+---------------------------------
 
 The default number of partitions for the topics created by KSQL. The default is four.
 This property has been deprecated since 5.3 release. For more info see the WITH clause properties in :ref:`CREATE STREAM AS SELECT <create-stream-as-select>` and :ref:`CREATE TABLE AS SELECT <create-table-as-select>`.
@@ -230,9 +231,9 @@ The corresponding environment variable in the
 
 .. _ksql-sink-replicas:
 
-------------------
+-------------------------------
 ksql.sink.replicas (Deprecated)
-------------------
+-------------------------------
 
 The default number of replicas for the topics created by KSQL. The default is one.
 This property has been deprecated since 5.3 release. For more info see the WITH clause properties in :ref:`CREATE STREAM AS SELECT <create-stream-as-select>` and :ref:`CREATE TABLE AS SELECT <create-table-as-select>`.
@@ -250,6 +251,60 @@ that you update your queries accordingly instead of enabling this configuration 
 The corresponding environment variable in the
 `KSQL Server image <https://hub.docker.com/r/confluentinc/cp-ksql-server/>`__ is
 ``KSQL_KSQL_FUNCTIONS_SUBSTRING_LEGACY_ARGS``.
+
+.. _ksql_persistence_wrap_single_values:
+
+-----------------------------------
+ksql.persistence.wrap.single.values
+-----------------------------------
+
+Sets the default value for the ``WRAP_SINGLE_VALUE`` property if one is
+not supplied explicitly in :ref:`CREATE TABLE <create-table>`,
+:ref:`CREATE STREAM <create-stream>`, :ref:`CREATE TABLE <create-table-as-select>`
+or :ref:`CREATE STREAM AS SELECT <create-stream-as-select>` statements.
+
+When set to the default value, ``true``, KSQL serializes the column value nested with a JSON object or
+an Avro record, depending on the format in use. When set to ``false``, KSQL persists the column
+value without any nesting.
+
+For example, consider the statement:
+
+.. code:: sql
+
+    CREATE STREAM y AS SELECT f0 FROM x;
+
+The statement selects a single field as the value of stream ``y``. If ``f0`` has the
+integer value ``10``,
+with ``ksql.persistence.wrap.single.values`` set to ``true``, the JSON format persists
+the value within a JSON object, as it would if the value had more fields:
+
+.. code:: json
+
+    {
+       "F0": 10
+    }
+
+With ``ksql.persistence.wrap.single.values`` set to ``false``, the JSON format
+persists the single field's value as a JSON number: ``10``.
+
+.. code:: json
+
+    10
+
+The ``AVRO`` format supports the same properties. The properties control whether or not the field's
+value is written as a named field within an Avro record or as an anonymous value.
+
+This setting can be toggled using the `SET` command
+
+ .. code:: sql
+     SET 'ksql.persistence.wrap.single.values'='false';
+
+For more information, refer to the :ref:`CREATE TABLE <create-table>`,
+:ref:`CREATE STREAM <create-stream>`, :ref:`CREATE TABLE <create-table-as-select>`
+or :ref:`CREATE STREAM AS SELECT <create-stream-as-select>` statements.
+
+.. note:: The ``DELIMITED`` format is  not affected by the `ksql.persistence.ensure.value.is.struct`` setting,
+          because it has no concept of an outer record or structure.
 
 KSQL Server Settings
 --------------------
@@ -316,6 +371,16 @@ The corresponding environment variable in the
 `KSQL Server image <https://hub.docker.com/r/confluentinc/cp-ksql-server/>`__ is
 ``KSQL_LISTENERS``.
 
+.. _ksql-metrics-tags-custom:
+
+------------------------
+ksql.metrics.tags.custom
+------------------------
+
+A list of tags to be included with emitted :ref:`JMX metrics <ksql-monitoring-and-metrics>`,
+formatted as a string of ``key:value`` pairs separated by commas.
+For example, ``key1:value1,key2:value2``.
+
 .. _ksql-c3-settings:
 
 |c3| Settings
@@ -352,9 +417,9 @@ to create a processing log topic at startup. The name of the topic is the value 
 
 .. _ksql-processing-log-topic-name:
 
-------------------------------
+----------------------------------
 ksql.logging.processing.topic.name
-------------------------------
+----------------------------------
 
 If automatic processing log topic creation is enabled, KSQL sets the name of the topic to the value of
 this property. If automatic processing log stream creation is enabled, KSQL uses this topic to back the
@@ -363,27 +428,27 @@ is the value of the :ref:`ksql-service-id` property.
 
 .. _ksql-processing-log-topic-partitions:
 
-------------------------------------
+----------------------------------------
 ksql.logging.processing.topic.partitions
-------------------------------------
+----------------------------------------
 
 If automatic processing log topic creation is enabled, KSQL creates the topic with number of partitions set
 to the value of this property. By default, this property has the value ``1``.
 
 .. _ksql-processing-log-replication-factor:
 
---------------------------------------------
+------------------------------------------------
 ksql.logging.processing.topic.replication.factor
---------------------------------------------
+------------------------------------------------
 
 If automatic processing log topic creation is enabled, KSQL creates the topic with  number of replicas set
 to the value of this property. By default, this property has the value ``1``.
 
 .. _ksql-processing-log-stream-auto-create:
 
---------------------------------------
+------------------------------------------
 ksql.logging.processing.stream.auto.create
---------------------------------------
+------------------------------------------
 
 Toggles automatic processing log stream creation. If set to true, and KSQL is running in interactive mode on a new cluster,
 KSQL automatically creates a processing log stream when it starts up. The name for the stream is the
@@ -392,18 +457,18 @@ the :ref:`ksql-processing-log-topic-name` property. By default, this property ha
 
 .. _ksql-processing-log-stream-name:
 
--------------------------------
+-----------------------------------
 ksql.logging.processing.stream.name
--------------------------------
+-----------------------------------
 
 If automatic processing log stream creation is enabled, KSQL sets the name of the stream to the value of this
 property. By default, this property has the value ``KSQL_PROCESSING_LOG``.
 
 .. _ksql-processing-log-include-rows:
 
---------------------------------
+------------------------------------
 ksql.logging.processing.rows.include
---------------------------------
+------------------------------------
 
 Toggles whether or not the processing log should include rows in log messages. By default, this property has the
 value ``false``.

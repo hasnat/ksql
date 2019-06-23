@@ -18,6 +18,7 @@ package io.confluent.ksql.parser.tree;
 import static java.util.Objects.requireNonNull;
 
 import com.google.errorprone.annotations.Immutable;
+import io.confluent.ksql.schema.ksql.SqlType;
 import java.util.Objects;
 import java.util.Optional;
 
@@ -59,5 +60,10 @@ public final class Array extends Type {
   @Override
   public int hashCode() {
     return Objects.hash(itemType);
+  }
+
+  @Override
+  public boolean supportsCast() {
+    return false;
   }
 }

@@ -16,7 +16,9 @@
 package io.confluent.ksql.util;
 
 import io.confluent.ksql.GenericRow;
-import io.confluent.ksql.schema.ksql.KsqlSchema;
+import io.confluent.ksql.schema.ksql.LogicalSchema;
+import io.confluent.ksql.schema.ksql.PhysicalSchema;
+import io.confluent.ksql.serde.SerdeOption;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Map;
@@ -32,7 +34,7 @@ public class ItemDataProvider extends TestDataProvider {
 
   private static final String key = "ID";
 
-  private static final KsqlSchema schema = KsqlSchema.of(SchemaBuilder.struct()
+  private static final LogicalSchema schema = LogicalSchema.of(SchemaBuilder.struct()
       .field("ID", SchemaBuilder.OPTIONAL_STRING_SCHEMA)
       .field("DESCRIPTION", SchemaBuilder.OPTIONAL_STRING_SCHEMA)
       .build());
@@ -40,7 +42,7 @@ public class ItemDataProvider extends TestDataProvider {
   private static final Map<String, GenericRow> data = buildData();
 
   public ItemDataProvider() {
-    super(namePrefix, ksqlSchemaString, key, schema, data);
+    super(namePrefix, ksqlSchemaString, key, PhysicalSchema.from(schema, SerdeOption.none()), data);
   }
 
   private static Map<String, GenericRow> buildData() {

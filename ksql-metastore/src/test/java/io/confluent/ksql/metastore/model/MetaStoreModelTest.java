@@ -23,9 +23,9 @@ import static org.junit.Assume.assumeThat;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.testing.NullPointerTester;
 import com.google.common.testing.NullPointerTester.Visibility;
-import io.confluent.ksql.schema.ksql.KsqlSchema;
-import io.confluent.ksql.serde.KsqlTopicSerDe;
-import io.confluent.ksql.serde.json.KsqlJsonTopicSerDe;
+import io.confluent.ksql.schema.ksql.LogicalSchema;
+import io.confluent.ksql.serde.KsqlSerdeFactory;
+import io.confluent.ksql.serde.json.KsqlJsonSerdeFactory;
 import io.confluent.ksql.test.util.ClassFinder;
 import io.confluent.ksql.test.util.ImmutableTester;
 import java.lang.reflect.Modifier;
@@ -45,13 +45,13 @@ public class MetaStoreModelTest {
 
   private static final ImmutableMap<Class<?>, Object> DEFAULTS = ImmutableMap
       .<Class<?>, Object>builder()
-      .put(KsqlTopicSerDe.class, new KsqlJsonTopicSerDe())
+      .put(KsqlSerdeFactory.class, new KsqlJsonSerdeFactory())
       .put(KsqlTopic.class,
-          new KsqlTopic("bob", "bob", new KsqlJsonTopicSerDe(), false))
+          new KsqlTopic("bob", "bob", new KsqlJsonSerdeFactory(), false))
       .put(org.apache.kafka.connect.data.Field.class,
           new org.apache.kafka.connect.data.Field("bob", 1, Schema.OPTIONAL_STRING_SCHEMA))
       .put(KeyField.class, KeyField.of(Optional.empty(), Optional.empty()))
-      .put(KsqlSchema.class, KsqlSchema.of(SchemaBuilder
+      .put(LogicalSchema.class, LogicalSchema.of(SchemaBuilder
           .struct()
           .optional()
           .field("f0", Schema.OPTIONAL_INT64_SCHEMA)
@@ -72,7 +72,7 @@ public class MetaStoreModelTest {
   @Test
   public void shouldBeImmutable() {
     new ImmutableTester()
-        .withKnownImmutableType(KsqlSchema.class)
+        .withKnownImmutableType(LogicalSchema.class)
         .withKnownImmutableType(org.apache.kafka.connect.data.Field.class)
         .test(modelClass);
   }

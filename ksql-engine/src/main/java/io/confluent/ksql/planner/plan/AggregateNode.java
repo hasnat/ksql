@@ -18,8 +18,6 @@ package io.confluent.ksql.planner.plan;
 import static io.confluent.ksql.metastore.model.DataSource.DataSourceType;
 import static java.util.Objects.requireNonNull;
 
-import com.fasterxml.jackson.annotation.JsonCreator;
-import com.fasterxml.jackson.annotation.JsonProperty;
 import com.google.common.collect.ImmutableList;
 import io.confluent.ksql.GenericRow;
 import io.confluent.ksql.function.AggregateFunctionArguments;
@@ -37,8 +35,10 @@ import io.confluent.ksql.parser.tree.QualifiedName;
 import io.confluent.ksql.parser.tree.QualifiedNameReference;
 import io.confluent.ksql.parser.tree.WindowExpression;
 import io.confluent.ksql.physical.KsqlQueryBuilder;
-import io.confluent.ksql.schema.ksql.KsqlSchema;
-import io.confluent.ksql.serde.KsqlTopicSerDe;
+import io.confluent.ksql.schema.ksql.LogicalSchema;
+import io.confluent.ksql.schema.ksql.PhysicalSchema;
+import io.confluent.ksql.serde.KsqlSerdeFactory;
+import io.confluent.ksql.serde.SerdeOption;
 import io.confluent.ksql.services.KafkaTopicClient;
 import io.confluent.ksql.structured.QueryContext;
 import io.confluent.ksql.structured.SchemaKGroupedStream;
@@ -75,7 +75,7 @@ public class AggregateNode extends PlanNode {
   private static final String PROJECT_OP_NAME = "project";
 
   private final PlanNode source;
-  private final KsqlSchema schema;
+  private final LogicalSchema schema;
   private final KeyField keyField;
   private final List<Expression> groupByExpressions;
   private final WindowExpression windowExpression;
@@ -86,19 +86,18 @@ public class AggregateNode extends PlanNode {
   private final Expression havingExpressions;
 
   // CHECKSTYLE_RULES.OFF: ParameterNumberCheck
-  @JsonCreator
   public AggregateNode(
-      @JsonProperty("id") final PlanNodeId id,
-      @JsonProperty("source") final PlanNode source,
-      @JsonProperty("schema") final KsqlSchema schema,
-      @JsonProperty("keyField") final Optional<String> keyFieldName,
-      @JsonProperty("groupby") final List<Expression> groupByExpressions,
-      @JsonProperty("window") final WindowExpression windowExpression,
-      @JsonProperty("aggregateFunctionArguments") final List<Expression> aggregateFunctionArguments,
-      @JsonProperty("functionList") final List<FunctionCall> functionList,
-      @JsonProperty("requiredColumnList") final List<DereferenceExpression> requiredColumns,
-      @JsonProperty("finalSelectExpressions") final List<Expression> finalSelectExpressions,
-      @JsonProperty("havingExpressions") final Expression havingExpressions
+      final PlanNodeId id,
+      final PlanNode source,
+      final LogicalSchema schema,
+      final Optional<String> keyFieldName,
+      final List<Expression> groupByExpressions,
+      final WindowExpression windowExpression,
+      final List<Expression> aggregateFunctionArguments,
+      final List<FunctionCall> functionList,
+      final List<DereferenceExpression> requiredColumns,
+      final List<Expression> finalSelectExpressions,
+      final Expression havingExpressions
   ) {
     // CHECKSTYLE_RULES.ON: ParameterNumberCheck
     super(id, DataSourceType.KTABLE);
@@ -120,7 +119,7 @@ public class AggregateNode extends PlanNode {
   }
 
   @Override
-  public KsqlSchema getSchema() {
+  public LogicalSchema getSchema() {
     return this.schema;
   }
 
@@ -160,17 +159,17 @@ public class AggregateNode extends PlanNode {
 
   private List<SelectExpression> getFinalSelectExpressions() {
     final List<SelectExpression> finalSelectExpressionList = new ArrayList<>();
-    if (finalSelectExpressions.size() != schema.fields().size()) {
+    if (finalSelectExpressions.size() != schema.valueFields().size()) {
       throw new RuntimeException(
           "Incompatible aggregate schema, field count must match, "
               + "selected field count:"
               + finalSelectExpressions.size()
               + " schema field count:"
-              + schema.fields().size());
+              + schema.valueFields().size());
     }
     for (int i = 0; i < finalSelectExpressions.size(); i++) {
       finalSelectExpressionList.add(SelectExpression.of(
-          schema.fields().get(i).name(),
+          schema.valueFields().get(i).name(),
           finalSelectExpressions.get(i)
       ));
     }
@@ -201,22 +200,23 @@ public class AggregateNode extends PlanNode {
 
     final QueryContext.Stacker groupByContext = contextStacker.push(GROUP_BY_OP_NAME);
 
-    final KsqlTopicSerDe ksqlTopicSerDe = streamSourceNode.getDataSource()
-        .getKsqlTopicSerde();
+    final KsqlSerdeFactory valueSerdeFactory = streamSourceNode.getDataSource()
+        .getValueSerdeFactory();
 
     final Serde<GenericRow> genericRowSerde = builder.buildGenericRowSerde(
-        ksqlTopicSerDe,
-        aggregateArgExpanded.getSchema().getSchema(),
+        valueSerdeFactory,
+        PhysicalSchema.from(aggregateArgExpanded.getSchema(), SerdeOption.none()),
         groupByContext.getQueryContext()
     );
 
     final List<Expression> internalGroupByColumns = internalSchema.getInternalExpressionList(
         getGroupByExpressions());
 
-    final SchemaKGroupedStream schemaKGroupedStream =
-        aggregateArgExpanded.groupBy(
-            genericRowSerde, internalGroupByColumns,
-            groupByContext);
+    final SchemaKGroupedStream schemaKGroupedStream = aggregateArgExpanded.groupBy(
+        genericRowSerde,
+        internalGroupByColumns,
+        groupByContext
+    );
 
     // Aggregate computations
     final Map<Integer, Integer> aggValToValColumnMap = createAggregateValueToValueColumnMap(
@@ -224,7 +224,7 @@ public class AggregateNode extends PlanNode {
         internalSchema
     );
 
-    final KsqlSchema aggStageSchema = buildAggregateSchema(
+    final LogicalSchema aggStageSchema = buildAggregateSchema(
         aggregateArgExpanded.getSchema(),
         builder.getFunctionRegistry(),
         internalSchema
@@ -233,8 +233,8 @@ public class AggregateNode extends PlanNode {
     final QueryContext.Stacker aggregationContext = contextStacker.push(AGGREGATION_OP_NAME);
 
     final Serde<GenericRow> aggValueGenericRowSerde = builder.buildGenericRowSerde(
-        ksqlTopicSerDe,
-        aggStageSchema.getSchema(),
+        valueSerdeFactory,
+        PhysicalSchema.from(aggStageSchema, SerdeOption.none()),
         aggregationContext.getQueryContext()
     );
 
@@ -291,7 +291,7 @@ public class AggregateNode extends PlanNode {
       final String exprStr =
           internalSchema.getInternalColumnForExpression(expression);
 
-      final int index = aggregateArgExpanded.getSchema().fieldIndex(exprStr)
+      final int index = aggregateArgExpanded.getSchema().valueFieldIndex(exprStr)
           .orElseThrow(IllegalStateException::new);
 
       aggValToValColumnMap.put(nonAggColumnIndex, index);
@@ -336,7 +336,7 @@ public class AggregateNode extends PlanNode {
       final FunctionRegistry functionRegistry,
       final InternalSchema internalSchema,
       final FunctionCall functionCall,
-      final KsqlSchema schema
+      final LogicalSchema schema
   ) {
     final ExpressionTypeManager expressionTypeManager =
         new ExpressionTypeManager(schema, functionRegistry);
@@ -355,13 +355,13 @@ public class AggregateNode extends PlanNode {
     return aggregateFunctionInfo.getInstance(new AggregateFunctionArguments(udafIndex, args));
   }
 
-  private KsqlSchema buildAggregateSchema(
-      final KsqlSchema schema,
+  private LogicalSchema buildAggregateSchema(
+      final LogicalSchema schema,
       final FunctionRegistry functionRegistry,
       final InternalSchema internalSchema
   ) {
     final SchemaBuilder schemaBuilder = SchemaBuilder.struct();
-    final List<Field> fields = schema.fields();
+    final List<Field> fields = schema.valueFields();
     for (int i = 0; i < getRequiredColumns().size(); i++) {
       schemaBuilder.field(fields.get(i).name(), fields.get(i).schema());
     }
@@ -379,7 +379,7 @@ public class AggregateNode extends PlanNode {
       );
     }
 
-    return KsqlSchema.of(schemaBuilder.build());
+    return LogicalSchema.of(schemaBuilder.build());
   }
 
   private static class InternalSchema {

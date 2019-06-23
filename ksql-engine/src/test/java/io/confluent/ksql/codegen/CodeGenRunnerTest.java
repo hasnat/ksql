@@ -43,8 +43,9 @@ import io.confluent.ksql.metastore.model.KeyField;
 import io.confluent.ksql.metastore.model.KsqlStream;
 import io.confluent.ksql.metastore.model.KsqlTopic;
 import io.confluent.ksql.parser.tree.Expression;
-import io.confluent.ksql.schema.ksql.KsqlSchema;
-import io.confluent.ksql.serde.json.KsqlJsonTopicSerDe;
+import io.confluent.ksql.schema.ksql.LogicalSchema;
+import io.confluent.ksql.serde.SerdeOption;
+import io.confluent.ksql.serde.json.KsqlJsonSerdeFactory;
 import io.confluent.ksql.util.ExpressionMetadata;
 import io.confluent.ksql.util.KsqlConfig;
 import io.confluent.ksql.util.KsqlException;
@@ -153,6 +154,8 @@ public class CodeGenRunnerTest {
             .build();
 
         final Schema metaStoreSchema = SchemaBuilder.struct()
+            .field("ROWTIME", SchemaBuilder.OPTIONAL_INT64_SCHEMA)
+            .field("ROWKEY", SchemaBuilder.OPTIONAL_STRING_SCHEMA)
             .field("COL0", SchemaBuilder.OPTIONAL_INT64_SCHEMA)
             .field("COL1", SchemaBuilder.OPTIONAL_STRING_SCHEMA)
             .field("COL2", SchemaBuilder.OPTIONAL_STRING_SCHEMA)
@@ -176,17 +179,22 @@ public class CodeGenRunnerTest {
         final KsqlTopic ksqlTopic = new KsqlTopic(
             "CODEGEN_TEST",
             "codegen_test",
-            new KsqlJsonTopicSerDe(), false);
+            new KsqlJsonSerdeFactory(), false);
+
         final KsqlStream ksqlStream = new KsqlStream<>(
             "sqlexpression",
             "CODEGEN_TEST",
-            KsqlSchema.of(metaStoreSchema),
+            LogicalSchema.of(metaStoreSchema),
+            SerdeOption.none(),
             KeyField.of("COL0", metaStoreSchema.field("COL0")),
             new MetadataTimestampExtractionPolicy(),
-            ksqlTopic,Serdes::String);
+            ksqlTopic,
+            Serdes::String
+        );
+
         metaStore.putTopic(ksqlTopic);
         metaStore.putSource(ksqlStream);
-        codeGenRunner = new CodeGenRunner(KsqlSchema.of(schema), ksqlConfig, functionRegistry);
+        codeGenRunner = new CodeGenRunner(LogicalSchema.of(schema), ksqlConfig, functionRegistry);
     }
 
     @Test

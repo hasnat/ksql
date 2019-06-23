@@ -17,11 +17,11 @@ package io.confluent.ksql.rest.server.resources.streaming;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.confluent.ksql.engine.KsqlEngine;
+import io.confluent.ksql.engine.TopicAccessValidator;
 import io.confluent.ksql.json.JsonMapper;
 import io.confluent.ksql.parser.KsqlParser.PreparedStatement;
 import io.confluent.ksql.parser.tree.PrintTopic;
 import io.confluent.ksql.parser.tree.Query;
-import io.confluent.ksql.rest.entity.KsqlEntityList;
 import io.confluent.ksql.rest.entity.KsqlRequest;
 import io.confluent.ksql.rest.entity.Versions;
 import io.confluent.ksql.rest.server.StatementParser;
@@ -65,6 +65,7 @@ public class StreamedQueryResource {
   private final Duration commandQueueCatchupTimeout;
   private final ObjectMapper objectMapper;
   private final ActivenessRegistrar activenessRegistrar;
+  private final TopicAccessValidator topicAccessValidator;
 
   public StreamedQueryResource(
       final KsqlConfig ksqlConfig,
@@ -73,7 +74,8 @@ public class StreamedQueryResource {
       final CommandQueue commandQueue,
       final Duration disconnectCheckInterval,
       final Duration commandQueueCatchupTimeout,
-      final ActivenessRegistrar activenessRegistrar
+      final ActivenessRegistrar activenessRegistrar,
+      final TopicAccessValidator topicAccessValidator
   ) {
     this.ksqlConfig = Objects.requireNonNull(ksqlConfig, "ksqlConfig");
     this.ksqlEngine = Objects.requireNonNull(ksqlEngine, "ksqlEngine");
@@ -86,6 +88,7 @@ public class StreamedQueryResource {
     this.objectMapper = JsonMapper.INSTANCE.mapper;
     this.activenessRegistrar =
         Objects.requireNonNull(activenessRegistrar, "activenessRegistrar");
+    this.topicAccessValidator = topicAccessValidator;
   }
 
   @POST
@@ -93,13 +96,6 @@ public class StreamedQueryResource {
       @Context final ServiceContext serviceContext,
       final KsqlRequest request
   ) throws Exception {
-    if (!ksqlEngine.isAcceptingStatements()) {
-      return Errors.serverErrorForStatement(
-          new KsqlException("Cluster has been terminated."),
-          "The cluster has been terminated. No new request will be accepted.",
-          new KsqlEntityList());
-    }
-
     activenessRegistrar.updateLastRequestTime();
 
     final PreparedStatement<?> statement = parseStatement(request);
@@ -131,7 +127,11 @@ public class StreamedQueryResource {
   ) throws Exception {
     try {
       if (statement.getStatement() instanceof Query) {
-        return handleQuery((PreparedStatement<Query>) statement, request.getStreamsProperties());
+        return handleQuery(
+            serviceContext,
+            (PreparedStatement<Query>) statement,
+            request.getStreamsProperties()
+        );
       }
 
       if (statement.getStatement() instanceof PrintTopic) {
@@ -150,12 +150,20 @@ public class StreamedQueryResource {
   }
 
   private Response handleQuery(
+      final ServiceContext serviceContext,
       final PreparedStatement<Query> statement,
       final Map<String, Object> streamsProperties
   ) throws Exception {
     final ConfiguredStatement<Query> configured =
         ConfiguredStatement.of(statement, streamsProperties, ksqlConfig);
-    final QueryMetadata query = ksqlEngine.execute(configured)
+
+    topicAccessValidator.validate(
+        serviceContext,
+        ksqlEngine.getMetaStore(),
+        statement.getStatement()
+    );
+
+    final QueryMetadata query = ksqlEngine.execute(serviceContext, configured)
         .getQuery()
         .get();
 
@@ -199,8 +207,8 @@ public class StreamedQueryResource {
         new HashMap<>(ksqlConfig.getKsqlStreamConfigProps());
     propertiesWithOverrides.putAll(streamProperties);
 
-    final TopicStreamWriter topicStreamWriter = new TopicStreamWriter(
-        serviceContext.getSchemaRegistryClient(),
+    final TopicStreamWriter topicStreamWriter = TopicStreamWriter.create(
+        serviceContext,
         propertiesWithOverrides,
         printTopic,
         disconnectCheckInterval

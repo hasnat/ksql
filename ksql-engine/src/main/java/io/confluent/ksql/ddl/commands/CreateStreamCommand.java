@@ -19,35 +19,30 @@ import io.confluent.ksql.metastore.MutableMetaStore;
 import io.confluent.ksql.metastore.model.KsqlStream;
 import io.confluent.ksql.parser.tree.CreateStream;
 import io.confluent.ksql.services.KafkaTopicClient;
-import io.confluent.ksql.util.KsqlException;
+import io.confluent.ksql.util.KsqlConfig;
 
-public class CreateStreamCommand extends AbstractCreateStreamCommand {
+public class CreateStreamCommand extends CreateSourceCommand {
 
-  public CreateStreamCommand(
+  CreateStreamCommand(
       final String sqlExpression,
       final CreateStream createStream,
+      final KsqlConfig ksqlConfig,
       final KafkaTopicClient kafkaTopicClient
   ) {
-    super(sqlExpression, createStream, kafkaTopicClient);
+    super(sqlExpression, createStream, ksqlConfig, kafkaTopicClient);
   }
 
   @Override
   public DdlCommandResult run(final MutableMetaStore metaStore) {
-    if (registerTopicCommand != null) {
-      try {
-        registerTopicCommand.run(metaStore);
-      } catch (KsqlException e) {
-        final String errorMessage =
-                String.format("Cannot create stream '%s': %s", topicName, e.getMessage());
-        throw new KsqlException(errorMessage, e);
-      }
-    }
+    registerTopic(metaStore, "stream");
+
     checkMetaData(metaStore, sourceName, topicName);
 
     final KsqlStream ksqlStream = new KsqlStream<>(
         sqlExpression,
         sourceName,
-        schema.withImplicitFields(),
+        schema.withImplicitAndKeyFieldsInValue(),
+        getSerdeOptions(),
         keyField,
         timestampExtractionPolicy,
         metaStore.getTopic(topicName),

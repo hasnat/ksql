@@ -25,6 +25,7 @@ import static org.mockito.Mockito.mock;
 
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
+import io.confluent.ksql.KsqlConfigTestUtil;
 import io.confluent.ksql.engine.KsqlEngine;
 import io.confluent.ksql.engine.KsqlEngineTestUtil;
 import io.confluent.ksql.function.InternalFunctionRegistry;
@@ -39,9 +40,10 @@ import io.confluent.ksql.rest.server.StatementParser;
 import io.confluent.ksql.rest.server.computation.CommandId.Action;
 import io.confluent.ksql.rest.server.computation.CommandId.Type;
 import io.confluent.ksql.rest.server.resources.KsqlResource;
+import io.confluent.ksql.rest.server.state.ServerState;
 import io.confluent.ksql.rest.util.ClusterTerminator;
-import io.confluent.ksql.schema.ksql.KsqlSchema;
-import io.confluent.ksql.serde.KsqlTopicSerDe;
+import io.confluent.ksql.schema.ksql.LogicalSchema;
+import io.confluent.ksql.serde.KsqlSerdeFactory;
 import io.confluent.ksql.services.FakeKafkaTopicClient;
 import io.confluent.ksql.services.ServiceContext;
 import io.confluent.ksql.services.TestServiceContext;
@@ -70,11 +72,8 @@ import org.junit.Before;
 import org.junit.Test;
 
 public class RecoveryTest {
-  private final KsqlConfig ksqlConfig = new KsqlConfig(
-      ImmutableMap.of(
-          "bootstrap.servers", "0.0.0.0"
-      )
-  );
+
+  private final KsqlConfig ksqlConfig = KsqlConfigTestUtil.create("0.0.0.0");
   private final List<QueuedCommand> commands = new LinkedList<>();
   private final FakeKafkaTopicClient topicClient = new FakeKafkaTopicClient();
   private final ServiceContext serviceContext = TestServiceContext.create(topicClient);
@@ -160,18 +159,23 @@ public class RecoveryTest {
     final FakeCommandQueue fakeCommandQueue;
     final StatementExecutor statementExecutor;
     final CommandRunner commandRunner;
+    final ServerState serverState;
 
     KsqlServer(final List<QueuedCommand> commandLog) {
       this.ksqlEngine = createKsqlEngine();
       this.fakeCommandQueue = new FakeCommandQueue(commandLog);
-
+      serverState = new ServerState();
+      serverState.setReady();
       this.ksqlResource = new KsqlResource(
           ksqlConfig,
           ksqlEngine,
           fakeCommandQueue,
           Duration.ofMillis(0),
           ()->{},
-          Injectors.DEFAULT);
+          Injectors.DEFAULT,
+          (sc, metastore, statement) -> {
+            return;
+          });
       this.statementExecutor = new StatementExecutor(
           ksqlConfig,
           ksqlEngine,
@@ -179,9 +183,9 @@ public class RecoveryTest {
       this.commandRunner = new CommandRunner(
           statementExecutor,
           fakeCommandQueue,
-          ksqlEngine,
           1,
-          mock(ClusterTerminator.class)
+          mock(ClusterTerminator.class),
+          serverState
       );
     }
 
@@ -223,12 +227,12 @@ public class RecoveryTest {
   private static class TopicMatcher extends TypeSafeDiagnosingMatcher<KsqlTopic> {
     final Matcher<String> nameMatcher;
     final Matcher<String> kafkaNameMatcher;
-    final Matcher<KsqlTopicSerDe> serDeMatcher;
+    final Matcher<KsqlSerdeFactory> serDeMatcher;
 
     TopicMatcher(final KsqlTopic topic) {
       this.nameMatcher = equalTo(topic.getKsqlTopicName());
       this.kafkaNameMatcher = equalTo(topic.getKafkaTopicName());
-      this.serDeMatcher = instanceOf(topic.getKsqlTopicSerDe().getClass());
+      this.serDeMatcher = instanceOf(topic.getValueSerdeFactory().getClass());
     }
 
     @Override
@@ -252,7 +256,7 @@ public class RecoveryTest {
       }
       return test(
           serDeMatcher,
-          other.getKsqlTopicSerDe(),
+          other.getValueSerdeFactory(),
           description,
           "serde mismatch: ");
     }
@@ -267,7 +271,7 @@ public class RecoveryTest {
     final DataSource<?> source;
     final Matcher<DataSource.DataSourceType> typeMatcher;
     final Matcher<String> nameMatcher;
-    final Matcher<KsqlSchema> schemaMatcher;
+    final Matcher<LogicalSchema> schemaMatcher;
     final Matcher<String> sqlMatcher;
     final Matcher<TimestampExtractionPolicy> extractionPolicyMatcher;
     final Matcher<KsqlTopic> topicMatcher;
@@ -399,14 +403,14 @@ public class RecoveryTest {
       extends TypeSafeDiagnosingMatcher<PersistentQueryMetadata> {
     private final Matcher<Set<String>> sourcesNamesMatcher;
     private final Matcher<Set<String>> sinkNamesMatcher;
-    private final Matcher<KsqlSchema> resultSchemaMatcher;
+    private final Matcher<LogicalSchema> resultSchemaMatcher;
     private final Matcher<String> sqlMatcher;
     private final Matcher<String> stateMatcher;
 
     PersistentQueryMetadataMatcher(final PersistentQueryMetadata metadata) {
       this.sourcesNamesMatcher = equalTo(metadata.getSourceNames());
       this.sinkNamesMatcher = equalTo(metadata.getSinkNames());
-      this.resultSchemaMatcher = equalTo(metadata.getResultSchema());
+      this.resultSchemaMatcher = equalTo(metadata.getLogicalSchema());
       this.sqlMatcher = equalTo(metadata.getStatementString());
       this.stateMatcher = equalTo(metadata.getState());
     }
@@ -447,7 +451,7 @@ public class RecoveryTest {
       }
       if (!test(
           resultSchemaMatcher,
-          metadata.getResultSchema(),
+          metadata.getLogicalSchema(),
           description,
           "schema mismatch: "
       )) {

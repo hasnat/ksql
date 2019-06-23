@@ -65,13 +65,17 @@ import io.confluent.ksql.rest.entity.StreamedRow;
 import io.confluent.ksql.rest.entity.StreamsList;
 import io.confluent.ksql.rest.entity.TablesList;
 import io.confluent.ksql.rest.entity.TopicDescription;
+import io.confluent.ksql.schema.ksql.SqlType;
 import io.confluent.ksql.util.CmdLineUtil;
 import io.confluent.ksql.util.HandlerMaps;
 import io.confluent.ksql.util.HandlerMaps.ClassHandlerMap1;
 import io.confluent.ksql.util.HandlerMaps.Handler1;
+import io.confluent.ksql.util.KsqlException;
 import java.io.Closeable;
+import java.io.File;
 import java.io.IOException;
 import java.io.PrintWriter;
+import java.nio.charset.Charset;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.Arrays;
@@ -93,7 +97,9 @@ import org.jline.terminal.Terminal.SignalHandler;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+// CHECKSTYLE_RULES.OFF: ClassDataAbstractionCoupling
 public class Console implements Closeable {
+  // CHECKSTYLE_RULES.ON: ClassDataAbstractionCoupling
 
   private static final Logger log = LoggerFactory.getLogger(Console.class);
 
@@ -152,6 +158,8 @@ public class Console implements Closeable {
   private final KsqlTerminal terminal;
   private final RowCaptor rowCaptor;
   private OutputFormat outputFormat;
+  private Optional<File> spoolFile = Optional.empty();
+
 
   public interface RowCaptor {
     void addRow(GenericRow row);
@@ -199,6 +207,23 @@ public class Console implements Closeable {
 
   public void flush() {
     terminal.flush();
+  }
+
+  public void setSpool(final File file) {
+    try {
+      terminal.setSpool(new PrintWriter(file, Charset.defaultCharset().name()));
+      spoolFile = Optional.of(file);
+      terminal.writer().println("Session will be spooled to " + file.getAbsolutePath());
+      terminal.writer().println("Enter SPOOL OFF to disable");
+    } catch (IOException e) {
+      throw new KsqlException("Cannot SPOOL to file: " + file, e);
+    }
+  }
+
+  public void unsetSpool() {
+    terminal.unsetSpool();
+    spoolFile.ifPresent(f -> terminal.writer().println("Spool written to " + f.getAbsolutePath()));
+    spoolFile = Optional.empty();
   }
 
   public int getWidth() {
@@ -369,23 +394,22 @@ public class Console implements Closeable {
 
   @SuppressWarnings("ConstantConditions")
   private static String schemaToTypeString(final SchemaInfo schema) {
-    // For now just dump the whole type out into 1 string.
-    // In the future we should consider a more readable format
     switch (schema.getType()) {
       case ARRAY:
-        return SchemaInfo.Type.ARRAY.name() + "<"
-               + schemaToTypeString(schema.getMemberSchema().get())
-               + ">";
+        return SqlType.ARRAY + "<"
+            + schemaToTypeString(schema.getMemberSchema().get())
+            + ">";
       case MAP:
-        return SchemaInfo.Type.MAP.name()
-               + "<" + SchemaInfo.Type.STRING + ", "
-               + schemaToTypeString(schema.getMemberSchema().get())
-               + ">";
+        return SqlType.MAP
+            + "<"
+            + SqlType.STRING + ", "
+            + schemaToTypeString(schema.getMemberSchema().get())
+            + ">";
       case STRUCT:
         return schema.getFields().get()
             .stream()
             .map(f -> f.getName() + " " + schemaToTypeString(f.getSchema()))
-            .collect(Collectors.joining(", ", SchemaInfo.Type.STRUCT.name() + "<", ">"));
+            .collect(Collectors.joining(", ", SqlType.STRUCT + "<", ">"));
       case STRING:
         return "VARCHAR(STRING)";
       default:
@@ -435,14 +459,18 @@ public class Console implements Closeable {
     }
   }
 
-  private void printWriteQueries(final SourceDescription source) {
-    if (!source.getWriteQueries().isEmpty()) {
+  private void printQueries(
+      final List<RunningQuery> queries,
+      final String type,
+      final String operation
+  ) {
+    if (!queries.isEmpty()) {
       writer().println(String.format(
           "%n%-20s%n%-20s",
-          "Queries that write into this " + source.getType(),
+          "Queries that " + operation + " from this " + type,
           "-----------------------------------"
       ));
-      for (final RunningQuery writeQuery : source.getWriteQueries()) {
+      for (final RunningQuery writeQuery : queries) {
         writer().println(writeQuery.getId().getId() + " : " + writeQuery.getQueryString());
       }
       writer().println("\nFor query topology and execution plan please run: EXPLAIN <QueryId>");
@@ -508,7 +536,9 @@ public class Console implements Closeable {
 
     printSchema(source.getFields(), source.getKey());
 
-    printWriteQueries(source);
+    printQueries(source.getReadQueries(), source.getType(), "read");
+
+    printQueries(source.getWriteQueries(), source.getType(), "write");
 
     writer().println(String.format(
         "%n%-20s%n%s",

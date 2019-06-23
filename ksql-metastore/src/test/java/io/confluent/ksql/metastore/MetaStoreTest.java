@@ -29,7 +29,8 @@ import io.confluent.ksql.metastore.model.DataSource;
 import io.confluent.ksql.metastore.model.KsqlStream;
 import io.confluent.ksql.metastore.model.KsqlTable;
 import io.confluent.ksql.metastore.model.KsqlTopic;
-import io.confluent.ksql.serde.json.KsqlJsonTopicSerDe;
+import io.confluent.ksql.serde.SerdeOption;
+import io.confluent.ksql.serde.json.KsqlJsonSerdeFactory;
 import io.confluent.ksql.util.MetaStoreFixture;
 import java.util.List;
 import org.apache.kafka.common.serialization.Serdes;
@@ -48,7 +49,7 @@ public class MetaStoreTest {
 
   @Test
   public void testTopicMap() {
-    final KsqlTopic ksqlTopic1 = new KsqlTopic("testTopic", "testTopicKafka", new KsqlJsonTopicSerDe(), false);
+    final KsqlTopic ksqlTopic1 = new KsqlTopic("testTopic", "testTopicKafka", new KsqlJsonSerdeFactory(), false);
     metaStore.putTopic(ksqlTopic1);
     final KsqlTopic ksqlTopic2 = metaStore.getTopic("testTopic");
     Assert.assertNotNull(ksqlTopic2);
@@ -75,10 +76,12 @@ public class MetaStoreTest {
     final DataSource<?> dataSource2 = new KsqlStream<>(
         "sqlexpression", "testStream",
         dataSource1.getSchema(),
+        SerdeOption.none(),
         dataSource1.getKeyField(),
         dataSource1.getTimestampExtractionPolicy(),
         dataSource1.getKsqlTopic(),
-        Serdes::String);
+        Serdes::String
+    );
 
     metaStore.putSource(dataSource2);
     final DataSource<?> dataSource3 = metaStore.getSource("testStream");

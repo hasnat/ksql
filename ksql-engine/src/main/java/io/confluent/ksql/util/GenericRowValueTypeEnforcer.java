@@ -17,7 +17,7 @@ package io.confluent.ksql.util;
 
 import com.google.common.collect.ImmutableMap;
 import edu.umd.cs.findbugs.annotations.SuppressFBWarnings;
-import io.confluent.ksql.schema.ksql.KsqlSchema;
+import io.confluent.ksql.schema.ksql.LogicalSchema;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Function;
@@ -35,13 +35,14 @@ public class GenericRowValueTypeEnforcer {
           .put(Schema.Type.FLOAT64, GenericRowValueTypeEnforcer::enforceDouble)
           .put(Schema.Type.STRING, GenericRowValueTypeEnforcer::enforceString)
           .put(Schema.Type.BOOLEAN, GenericRowValueTypeEnforcer::enforceBoolean)
+          .put(Schema.Type.BYTES, v -> v)
           .put(Schema.Type.ARRAY, v -> v)
           .put(Schema.Type.MAP, v -> v)
           .put(Schema.Type.STRUCT, v -> v)
           .build();
 
-  public GenericRowValueTypeEnforcer(final KsqlSchema schema) {
-    this.fields = schema.fields();
+  public GenericRowValueTypeEnforcer(final LogicalSchema schema) {
+    this.fields = schema.valueFields();
   }
 
   public Object enforceFieldType(final int index, final Object value) {

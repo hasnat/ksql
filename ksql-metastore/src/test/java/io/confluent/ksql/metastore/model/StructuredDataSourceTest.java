@@ -18,7 +18,8 @@ package io.confluent.ksql.metastore.model;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 
-import io.confluent.ksql.schema.ksql.KsqlSchema;
+import io.confluent.ksql.schema.ksql.LogicalSchema;
+import io.confluent.ksql.serde.SerdeOption;
 import io.confluent.ksql.util.timestamp.TimestampExtractionPolicy;
 import org.apache.kafka.common.serialization.Serdes;
 import org.apache.kafka.connect.data.Schema;
@@ -31,9 +32,11 @@ import org.mockito.junit.MockitoJUnitRunner;
 @RunWith(MockitoJUnitRunner.class)
 public class StructuredDataSourceTest {
 
-  private static final KsqlSchema SOME_SCHEMA = KsqlSchema.of(
+  private static final LogicalSchema SOME_SCHEMA = LogicalSchema.of(
       SchemaBuilder.struct()
-      .field("f0", Schema.OPTIONAL_INT64_SCHEMA)
+          .field("ROWTIME", Schema.OPTIONAL_INT64_SCHEMA)
+          .field("ROWKEY", Schema.OPTIONAL_STRING_SCHEMA)
+          .field("f0", Schema.OPTIONAL_INT64_SCHEMA)
           .build()
   );
 
@@ -58,18 +61,19 @@ public class StructuredDataSourceTest {
   private static final class TestStructuredDataSource extends StructuredDataSource<String> {
 
     private TestStructuredDataSource(
-        final KsqlSchema schema,
+        final LogicalSchema schema,
         final KeyField keyField
     ) {
       super(
           "some SQL",
           "some name",
           schema,
-          keyField,
+          SerdeOption.none(), keyField,
           mock(TimestampExtractionPolicy.class),
           DataSourceType.KSTREAM,
           mock(KsqlTopic.class),
-          Serdes::String);
+          Serdes::String
+      );
     }
   }
 }

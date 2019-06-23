@@ -16,12 +16,14 @@
 package io.confluent.ksql.physical;
 
 import static io.confluent.ksql.metastore.model.DataSource.DataSourceType;
+import static io.confluent.ksql.metastore.model.MetaStoreMatchers.hasSerdeOptions;
 import static io.confluent.ksql.planner.plan.PlanTestUtil.verifyProcessorNode;
 import static io.confluent.ksql.util.KsqlExceptionMatcher.rawMessage;
 import static io.confluent.ksql.util.KsqlExceptionMatcher.statementText;
 import static org.hamcrest.CoreMatchers.containsString;
 import static org.hamcrest.CoreMatchers.equalTo;
 import static org.hamcrest.MatcherAssert.assertThat;
+import static org.hamcrest.Matchers.hasItem;
 import static org.hamcrest.Matchers.hasSize;
 import static org.hamcrest.Matchers.is;
 import static org.hamcrest.Matchers.not;
@@ -35,6 +37,7 @@ import static org.mockito.Mockito.when;
 
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
+import io.confluent.ksql.KsqlConfigTestUtil;
 import io.confluent.ksql.engine.KsqlEngine;
 import io.confluent.ksql.engine.KsqlEngineTestUtil;
 import io.confluent.ksql.errors.ProductionExceptionHandlerUtil;
@@ -51,8 +54,9 @@ import io.confluent.ksql.planner.LogicalPlanNode;
 import io.confluent.ksql.planner.plan.OutputNode;
 import io.confluent.ksql.planner.plan.PlanTestUtil;
 import io.confluent.ksql.query.QueryId;
-import io.confluent.ksql.schema.ksql.KsqlSchema;
+import io.confluent.ksql.schema.ksql.LogicalSchema;
 import io.confluent.ksql.serde.Format;
+import io.confluent.ksql.serde.SerdeOption;
 import io.confluent.ksql.services.FakeKafkaTopicClient;
 import io.confluent.ksql.services.KafkaTopicClient;
 import io.confluent.ksql.services.ServiceContext;
@@ -140,12 +144,7 @@ public class PhysicalPlanBuilderTest {
   private static final String simpleSelectFilter = "SELECT col0, col2, col3 FROM test1 WHERE col0 > 100;";
   private PhysicalPlanBuilder physicalPlanBuilder;
   private final MutableMetaStore metaStore = MetaStoreFixture.getNewMetaStore(new InternalFunctionRegistry());
-  private static final KsqlConfig INITIAL_CONFIG = new KsqlConfig(
-      ImmutableMap.of(
-          ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, "localhost:9092",
-          "commit.interval.ms", 0,
-          "cache.max.bytes.buffering", 0,
-          "auto.offset.reset", "earliest"));
+  private static final KsqlConfig INITIAL_CONFIG = KsqlConfigTestUtil.create("what-eva");
   private final KafkaTopicClient kafkaTopicClient = new FakeKafkaTopicClient();
   private KsqlEngine ksqlEngine;
   private ProcessingLogContext processingLogContext;
@@ -158,6 +157,7 @@ public class PhysicalPlanBuilderTest {
   private Consumer<QueryMetadata> queryCloseCallback;
 
   private KsqlConfig ksqlConfig;
+  private MetaStoreImpl engineMetastore;
 
   // Test implementation of KafkaStreamsBuilder that tracks calls and returned values
   private static class TestKafkaStreamsBuilder implements KafkaStreamsBuilder {
@@ -201,9 +201,10 @@ public class PhysicalPlanBuilderTest {
     processingLogContext = ProcessingLogContext.create();
     testKafkaStreamsBuilder = new TestKafkaStreamsBuilder(serviceContext);
     physicalPlanBuilder = buildPhysicalPlanBuilder(Collections.emptyMap());
+    engineMetastore = new MetaStoreImpl(new InternalFunctionRegistry());
     ksqlEngine = KsqlEngineTestUtil.createKsqlEngine(
         serviceContext,
-        new MetaStoreImpl(new InternalFunctionRegistry())
+        engineMetastore
     );
   }
 
@@ -254,7 +255,7 @@ public class PhysicalPlanBuilderTest {
     final QueryMetadata queryMetadata = buildPhysicalPlan(simpleSelectFilter);
 
     // Then:
-    assertThat(queryMetadata.getResultSchema(), is(KsqlSchema.of(
+    assertThat(queryMetadata.getLogicalSchema(), is(LogicalSchema.of(
         SchemaBuilder.struct()
             .field("COL0", Schema.OPTIONAL_INT64_SCHEMA)
             .field("COL2", Schema.OPTIONAL_STRING_SCHEMA)
@@ -270,10 +271,8 @@ public class PhysicalPlanBuilderTest {
         "CREATE STREAM FOO AS " + simpleSelectFilter);
 
     // Then:
-    assertThat(queryMetadata.getResultSchema(), is(KsqlSchema.of(
+    assertThat(queryMetadata.getLogicalSchema(), is(LogicalSchema.of(
         SchemaBuilder.struct()
-            .field("ROWTIME", Schema.OPTIONAL_INT64_SCHEMA)
-            .field("ROWKEY", Schema.OPTIONAL_STRING_SCHEMA)
             .field("COL0", Schema.OPTIONAL_INT64_SCHEMA)
             .field("COL2", Schema.OPTIONAL_STRING_SCHEMA)
             .field("COL3", Schema.OPTIONAL_FLOAT64_SCHEMA)
@@ -326,24 +325,24 @@ public class PhysicalPlanBuilderTest {
     final String planText = metadata.getExecutionPlan();
     final String[] lines = planText.split("\n");
     assertThat(lines[0], startsWith(
-        " > [ SINK ] | Schema: [COL0 : BIGINT, KSQL_COL_1 : DOUBLE, KSQL_COL_2 : BIGINT] |"));
+        " > [ SINK ] | Schema: [COL0 BIGINT, KSQL_COL_1 DOUBLE, KSQL_COL_2 BIGINT] |"));
     assertThat(lines[1], startsWith(
-        "\t\t > [ AGGREGATE ] | Schema: [KSQL_INTERNAL_COL_0 : BIGINT, "
-            + "KSQL_INTERNAL_COL_1 : DOUBLE, KSQL_AGG_VARIABLE_0 : DOUBLE, "
-            + "KSQL_AGG_VARIABLE_1 : BIGINT] |"));
+        "\t\t > [ AGGREGATE ] | Schema: [KSQL_INTERNAL_COL_0 BIGINT, "
+            + "KSQL_INTERNAL_COL_1 DOUBLE, KSQL_AGG_VARIABLE_0 DOUBLE, "
+            + "KSQL_AGG_VARIABLE_1 BIGINT] |"));
     assertThat(lines[2], startsWith(
-        "\t\t\t\t > [ PROJECT ] | Schema: [KSQL_INTERNAL_COL_0 : BIGINT, "
-            + "KSQL_INTERNAL_COL_1 : DOUBLE] |"));
+        "\t\t\t\t > [ PROJECT ] | Schema: [KSQL_INTERNAL_COL_0 BIGINT, "
+            + "KSQL_INTERNAL_COL_1 DOUBLE] |"));
     assertThat(lines[3], startsWith(
-        "\t\t\t\t\t\t > [ FILTER ] | Schema: [TEST1.ROWTIME : BIGINT, TEST1.ROWKEY : BIGINT, "
-            + "TEST1.COL0 : BIGINT, TEST1.COL1 : VARCHAR, TEST1.COL2 : VARCHAR, "
-            + "TEST1.COL3 : DOUBLE, TEST1.COL4 : ARRAY<DOUBLE>, "
-            + "TEST1.COL5 : MAP<VARCHAR,DOUBLE>] |"));
+        "\t\t\t\t\t\t > [ FILTER ] | Schema: [TEST1.ROWTIME BIGINT, TEST1.ROWKEY VARCHAR, "
+            + "TEST1.COL0 BIGINT, TEST1.COL1 VARCHAR, TEST1.COL2 VARCHAR, "
+            + "TEST1.COL3 DOUBLE, TEST1.COL4 ARRAY<DOUBLE>, "
+            + "TEST1.COL5 MAP<VARCHAR, DOUBLE>] |"));
     assertThat(lines[4], startsWith(
-        "\t\t\t\t\t\t\t\t > [ SOURCE ] | Schema: [TEST1.ROWTIME : BIGINT, TEST1.ROWKEY : BIGINT, "
-            + "TEST1.COL0 : BIGINT, TEST1.COL1 : VARCHAR, TEST1.COL2 : VARCHAR, "
-            + "TEST1.COL3 : DOUBLE, TEST1.COL4 : ARRAY<DOUBLE>, "
-            + "TEST1.COL5 : MAP<VARCHAR,DOUBLE>] |"));
+        "\t\t\t\t\t\t\t\t > [ SOURCE ] | Schema: [TEST1.ROWTIME BIGINT, TEST1.ROWKEY VARCHAR, "
+            + "TEST1.COL0 BIGINT, TEST1.COL1 VARCHAR, TEST1.COL2 VARCHAR, "
+            + "TEST1.COL3 DOUBLE, TEST1.COL4 ARRAY<DOUBLE>, "
+            + "TEST1.COL5 MAP<VARCHAR, DOUBLE>] |"));
   }
 
   @Test
@@ -361,15 +360,15 @@ public class PhysicalPlanBuilderTest {
     final String[] lines = planText.split("\n");
     Assert.assertTrue(lines.length == 3);
     Assert.assertEquals(lines[0],
-        " > [ SINK ] | Schema: [COL0 : BIGINT, COL1 : VARCHAR, COL2 : DOUBLE] | Logger: InsertQuery_1.S1");
+        " > [ SINK ] | Schema: [COL0 BIGINT, COL1 VARCHAR, COL2 DOUBLE] | Logger: InsertQuery_1.S1");
     Assert.assertEquals(lines[1],
-        "\t\t > [ PROJECT ] | Schema: [COL0 : BIGINT, COL1 : VARCHAR, COL2 : DOUBLE] | Logger: InsertQuery_1.Project");
+        "\t\t > [ PROJECT ] | Schema: [COL0 BIGINT, COL1 VARCHAR, COL2 DOUBLE] | Logger: InsertQuery_1.Project");
     Assert.assertEquals(lines[2],
-        "\t\t\t\t > [ SOURCE ] | Schema: [TEST1.ROWTIME : BIGINT, TEST1.ROWKEY : VARCHAR, TEST1.COL0 : BIGINT, TEST1.COL1 : VARCHAR, TEST1.COL2 : DOUBLE] | Logger: InsertQuery_1.KsqlTopic");
+        "\t\t\t\t > [ SOURCE ] | Schema: [TEST1.ROWTIME BIGINT, TEST1.ROWKEY VARCHAR, TEST1.COL0 BIGINT, TEST1.COL1 VARCHAR, TEST1.COL2 DOUBLE] | Logger: InsertQuery_1.KsqlTopic");
     assertThat(queryMetadataList.get(1), instanceOf(PersistentQueryMetadata.class));
     final PersistentQueryMetadata persistentQuery = (PersistentQueryMetadata)
         queryMetadataList.get(1);
-    assertThat(persistentQuery.getResultTopic().getKsqlTopicSerDe().getSerDe(),
+    assertThat(persistentQuery.getResultTopic().getValueSerdeFactory().getFormat(),
         equalTo(Format.DELIMITED));
   }
 
@@ -399,9 +398,9 @@ public class PhysicalPlanBuilderTest {
     expectedException.expect(KsqlStatementException.class);
     expectedException.expect(rawMessage(is(
         "Incompatible schema between results and sink. Result schema is "
-            + "[ROWTIME : BIGINT, ROWKEY : VARCHAR, COL0 : BIGINT, COL1 : VARCHAR, COL2 : DOUBLE], "
+            + "[ROWTIME BIGINT, ROWKEY VARCHAR, COL0 BIGINT, COL1 VARCHAR, COL2 DOUBLE], "
             + "but the sink schema is "
-            + "[ROWTIME : BIGINT, ROWKEY : VARCHAR, COL0 : BIGINT, COL1 : VARCHAR].")));
+            + "[ROWTIME BIGINT, ROWKEY VARCHAR, COL0 BIGINT, COL1 VARCHAR].")));
 
     // When:
     execute(CREATE_STREAM_TEST1 + csasQuery + insertIntoQuery);
@@ -444,14 +443,14 @@ public class PhysicalPlanBuilderTest {
     final String planText = queries.get(1).getExecutionPlan();
     final String[] lines = planText.split("\n");
     assertThat(lines.length, equalTo(3));
-    assertThat(lines[0], containsString("> [ SINK ] | "
-        + "Schema: [ROWTIME : BIGINT, ROWKEY : VARCHAR, COL0 : INT]"));
+    assertThat(lines[0], containsString(
+        "> [ SINK ] | Schema: [ROWTIME BIGINT, ROWKEY VARCHAR, COL0 INT]"));
 
-    assertThat(lines[1], containsString("> [ PROJECT ] | "
-        + "Schema: [ROWTIME : BIGINT, ROWKEY : VARCHAR, COL0 : INT]"));
+    assertThat(lines[1], containsString(
+        "> [ PROJECT ] | Schema: [ROWTIME BIGINT, ROWKEY VARCHAR, COL0 INT]"));
 
-    assertThat(lines[2], containsString("> [ SOURCE ] | "
-        + "Schema: [TEST1.ROWTIME : BIGINT, TEST1.ROWKEY : VARCHAR, TEST1.COL0 : INT]"));
+    assertThat(lines[2], containsString(
+        "> [ SOURCE ] | Schema: [TEST1.ROWTIME BIGINT, TEST1.ROWKEY VARCHAR, TEST1.COL0 INT]"));
   }
 
   @Test
@@ -490,12 +489,12 @@ public class PhysicalPlanBuilderTest {
     final String[] lines = planText.split("\n");
     assertThat(lines.length, equalTo(4));
     assertThat(lines[0],
-        equalTo(" > [ REKEY ] | Schema: [COL0 : BIGINT, COL1 : VARCHAR, COL2 : DOUBLE] "
+        equalTo(" > [ REKEY ] | Schema: [COL0 BIGINT, COL1 VARCHAR, COL2 DOUBLE] "
             + "| Logger: InsertQuery_1.S1"));
-    assertThat(lines[1], equalTo("\t\t > [ SINK ] | Schema: [COL0 : BIGINT, COL1 : VARCHAR, COL2 "
-        + ": DOUBLE] | Logger: InsertQuery_1.S1"));
-    assertThat(lines[2], equalTo("\t\t\t\t > [ PROJECT ] | Schema: [COL0 : BIGINT, COL1 : VARCHAR"
-        + ", COL2 : DOUBLE] | Logger: InsertQuery_1.Project"));
+    assertThat(lines[1], equalTo("\t\t > [ SINK ] | Schema: [COL0 BIGINT, COL1 VARCHAR, COL2 "
+        + "DOUBLE] | Logger: InsertQuery_1.S1"));
+    assertThat(lines[2], equalTo("\t\t\t\t > [ PROJECT ] | Schema: [COL0 BIGINT, COL1 VARCHAR"
+        + ", COL2 DOUBLE] | Logger: InsertQuery_1.Project"));
   }
 
   @Test
@@ -746,8 +745,8 @@ public class PhysicalPlanBuilderTest {
     givenKafkaTopicsExist("test1");
     final List<QueryMetadata> queryMetadataList = execute(
         CREATE_STREAM_TEST1 + csasQuery + insertIntoQuery);
-    final KsqlSchema resultSchema = queryMetadataList.get(0).getResultSchema();
-    resultSchema.fields().forEach(
+    final LogicalSchema resultSchema = queryMetadataList.get(0).getLogicalSchema();
+    resultSchema.valueFields().forEach(
         field -> Assert.assertTrue(field.schema().isOptional())
     );
   }
@@ -777,7 +776,7 @@ public class PhysicalPlanBuilderTest {
 
     // Then:
     assertThat(result.getExecutionPlan(),
-        containsString("[ REKEY ] | Schema: [TEST2.ROWTIME : BIGINT"));
+        containsString("[ REKEY ] | Schema: [TEST2.ROWTIME BIGINT"));
   }
 
   @Test
@@ -794,7 +793,7 @@ public class PhysicalPlanBuilderTest {
 
     // Then:
     assertThat(result.getExecutionPlan(),
-        containsString("[ REKEY ] | Schema: [TEST3.ROWTIME : BIGINT"));
+        containsString("[ REKEY ] | Schema: [TEST3.ROWTIME BIGINT"));
   }
 
   @Test
@@ -924,7 +923,7 @@ public class PhysicalPlanBuilderTest {
 
     // Then:
     assertThat(result.getExecutionPlan(),
-        containsString("[ REKEY ] | Schema: [TEST2.ROWTIME : BIGINT"));
+        containsString("[ REKEY ] | Schema: [TEST2.ROWTIME BIGINT"));
   }
 
   @Test
@@ -942,7 +941,7 @@ public class PhysicalPlanBuilderTest {
 
     // Then:
     assertThat(result.getExecutionPlan(),
-        containsString("[ REKEY ] | Schema: [TEST3.ROWTIME : BIGINT"));
+        containsString("[ REKEY ] | Schema: [TEST3.ROWTIME BIGINT"));
   }
 
   @Test
@@ -998,9 +997,9 @@ public class PhysicalPlanBuilderTest {
 
     // Then:
     assertThat(result.getExecutionPlan(),
-        containsString("[ REKEY ] | Schema: [TEST2.ROWTIME : BIGINT"));
+        containsString("[ REKEY ] | Schema: [TEST2.ROWTIME BIGINT"));
     assertThat(result.getExecutionPlan(),
-        containsString("[ REKEY ] | Schema: [TEST3.ROWTIME : BIGINT"));
+        containsString("[ REKEY ] | Schema: [TEST3.ROWTIME BIGINT"));
   }
 
   @Test
@@ -1018,9 +1017,9 @@ public class PhysicalPlanBuilderTest {
 
     // Then:
     assertThat(result.getExecutionPlan(),
-        containsString("[ REKEY ] | Schema: [TEST7.ROWTIME : BIGINT"));
+        containsString("[ REKEY ] | Schema: [TEST7.ROWTIME BIGINT"));
     assertThat(result.getExecutionPlan(),
-        containsString("[ REKEY ] | Schema: [TEST7.ROWTIME : BIGINT"));
+        containsString("[ REKEY ] | Schema: [TEST7.ROWTIME BIGINT"));
   }
 
   @Test
@@ -1051,6 +1050,50 @@ public class PhysicalPlanBuilderTest {
         + "ON test4.id = test5.rowkey;");
 
     // Then: did not throw.
+  }
+
+  @Test
+  public void shouldGetSingleValueSchemaWrappingFromPropertiesBeforeConfig() {
+    // Given:
+    givenConfigWith(KsqlConfig.KSQL_WRAP_SINGLE_VALUES, true);
+    givenKafkaTopicsExist("test1");
+    execute(CREATE_STREAM_TEST1);
+
+    // When:
+    execute("CREATE STREAM TEST2 WITH(WRAP_SINGLE_VALUE=false) AS SELECT COL0 FROM TEST1;");
+
+    // Then:
+    assertThat(engineMetastore.getSource("TEST2"),
+        hasSerdeOptions(hasItem(SerdeOption.UNWRAP_SINGLE_VALUES)));
+  }
+
+  @Test
+  public void shouldGetSingleValueSchemaWrappingFromConfig() {
+    // Given:
+    givenConfigWith(KsqlConfig.KSQL_WRAP_SINGLE_VALUES, false);
+    givenKafkaTopicsExist("test4");
+    execute(CREATE_TABLE_TEST4);
+
+    // When:
+    execute("CREATE TABLE TEST5 AS SELECT COL0 FROM TEST4;");
+
+    // Then:
+    assertThat(engineMetastore.getSource("TEST5"),
+        hasSerdeOptions(hasItem(SerdeOption.UNWRAP_SINGLE_VALUES)));
+  }
+
+  @Test
+  public void shouldDefaultToWrappingSingleValueSchemas() {
+    // Given:
+    givenKafkaTopicsExist("test4");
+    execute(CREATE_TABLE_TEST4);
+
+    // When:
+    execute("CREATE TABLE TEST5 AS SELECT COL0 FROM TEST4;");
+
+    // Then:
+    assertThat(engineMetastore.getSource("TEST5"),
+        hasSerdeOptions(not(hasItem(SerdeOption.UNWRAP_SINGLE_VALUES))));
   }
 
   @SuppressWarnings("SameParameterValue")

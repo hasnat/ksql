@@ -20,7 +20,7 @@ import static org.hamcrest.Matchers.is;
 
 import com.google.common.collect.ImmutableMap;
 import com.google.common.testing.EqualsTester;
-import io.confluent.ksql.schema.ksql.KsqlSchema;
+import io.confluent.ksql.schema.ksql.LogicalSchema;
 import io.confluent.ksql.util.KsqlConfig;
 import java.util.Optional;
 import org.apache.kafka.connect.data.Field;
@@ -32,7 +32,7 @@ import org.junit.rules.ExpectedException;
 
 public class KeyFieldTest {
 
-  private static final KsqlSchema SCHEMA = KsqlSchema.of(
+  private static final LogicalSchema SCHEMA = LogicalSchema.of(
       SchemaBuilder.struct()
       .field("field0", Schema.OPTIONAL_STRING_SCHEMA)
       .field("field1", Schema.OPTIONAL_INT64_SCHEMA)
@@ -50,8 +50,8 @@ public class KeyFieldTest {
   private static final Field RANDOM_FIELD =
       new Field("won't find me anywhere", 0, Schema.OPTIONAL_STRING_SCHEMA);
 
-  private static final Field SCHEMA_FIELD = SCHEMA.fields().get(0);
-  private static final Field OTHER_SCHEMA_FIELD = SCHEMA.fields().get(1);
+  private static final Field SCHEMA_FIELD = SCHEMA.valueFields().get(0);
+  private static final Field OTHER_SCHEMA_FIELD = SCHEMA.valueFields().get(1);
 
   private static final String SOME_ALIAS = "fred";
 
@@ -73,7 +73,7 @@ public class KeyFieldTest {
   @Test
   public void shouldImplementHashCodeAndEqualsProperly() {
     final Optional<String> keyField = Optional.of("key");
-    final Optional<Field> legacy = Optional.of(SCHEMA.fields().get(0));
+    final Optional<Field> legacy = Optional.of(SCHEMA.valueFields().get(0));
 
     new EqualsTester()
         .addEqualityGroup(KeyField.of(keyField, legacy), KeyField.of(keyField, legacy))
